@@ -1,0 +1,12 @@
+[workspace]
+members = [ "crates/app",
+    "crates/app",
+    "crates/core",
+    "crates/engine", 
+    "crates/exchanges/binance", 
+    "crates/exchanges/bitget", 
+    "crates/exchanges/bybit", 
+    "crates/exchanges/coinbase", 
+    "crates/exchanges/kraken", 
+    "crates/exchanges/okx"]
+resolver = "3"
