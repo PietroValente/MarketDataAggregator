@@ -97,25 +97,12 @@ impl LocalBook {
         self.update_id = 0;
     }
 
-    pub fn top_n_ask(&self, n: usize) -> Vec<&BookLevel> {
-        self.ask.iter().map(|x| x.1).take(n).collect()
+    pub fn top_n_ask(&self, n: usize) -> Vec<BookLevel> {
+        self.ask.values().take(n).copied().collect()
     }
 
-    pub fn top_n_bid(&self, n: usize) -> Vec<&BookLevel> {
-        self.bid.iter().map(|x| x.1).take(n).collect()
-    }
-
-    pub fn print_n(&self, n: usize) {
-        let ask = self.top_n_ask(n);
-        let bid = self.top_n_bid(n);
-        println!("ASK");
-        for l in ask {
-            println!("{}    {}", l.px, l.qty);
-        }
-        println!("BID");
-        for l in bid {
-            println!("{}    {}", l.px, l.qty);
-        }
+    pub fn top_n_bid(&self, n: usize) -> Vec<BookLevel> {
+        self.bid.values().take(n).copied().collect()
     }
 }
 

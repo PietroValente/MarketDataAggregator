@@ -14,7 +14,14 @@ pub struct NormalizedUpdate {
     pub data: BookUpdate
 }
 
+pub struct NormalizedTop {
+    pub instrument: Instrument,
+    pub n: usize
+}
+
 pub enum NormalizedEvent {
+    TopAsk(Exchange, NormalizedTop),
+    TopBid(Exchange, NormalizedTop),
     Status(Exchange, ExchangeStatus),
     Snapshot(Exchange, NormalizedSnapshot),
     Update(Exchange, NormalizedUpdate)

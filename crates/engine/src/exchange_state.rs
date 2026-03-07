@@ -1,4 +1,4 @@
-use md_core::{book::{LocalBook, LocalBookError}, events::{NormalizedSnapshot, NormalizedUpdate}, types::{ExchangeStatus, Instrument}};
+use md_core::{book::{BookLevel, LocalBook, LocalBookError}, events::{NormalizedSnapshot, NormalizedTop, NormalizedUpdate}, types::{ExchangeStatus, Instrument}};
 use std::{collections::HashMap, time::Instant};
 use thiserror::Error;
 
@@ -37,6 +37,18 @@ impl ExchangeState {
     pub fn apply_status(&mut self, status: ExchangeStatus) {
         // TODO: log change of state
         self.status = status;
+    }
+
+    pub fn top_n_ask(&self, top: NormalizedTop) -> Result<Vec<BookLevel>, ExchangeStateError> {       
+        Ok(self.markets.get(&top.instrument)
+            .ok_or_else(|| ExchangeStateError::InstrumentNotFound(top.instrument))?
+            .top_n_ask(top.n))
+    }
+
+    pub fn top_n_bid(&self, top: NormalizedTop) -> Result<Vec<BookLevel>, ExchangeStateError> {       
+        Ok(self.markets.get(&top.instrument)
+            .ok_or_else(|| ExchangeStateError::InstrumentNotFound(top.instrument))?
+            .top_n_bid(top.n))
     }
 }
 
