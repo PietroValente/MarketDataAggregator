@@ -19,7 +19,7 @@ impl fmt::Display for Qty {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Instrument(pub String);
 
 impl fmt::Display for Instrument {
@@ -28,14 +28,28 @@ impl fmt::Display for Instrument {
     }
 }
 
+#[derive(Debug)]
 pub enum Exchange {
     Binance,
     Bybit,
-    CoinBase,
+    Coinbase,
     Kraken,
     Okx
 }
 
+impl fmt::Display for Exchange {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Exchange::Binance => write!(f, "Binance"),
+            Exchange::Bybit => write!(f, "Bybit"),
+            Exchange::Coinbase => write!(f, "Coinbase"),
+            Exchange::Kraken => write!(f, "Kraken"),
+            Exchange::Okx => write!(f, "Okx")
+        }
+    }
+}
+
+#[derive(Debug)]
 pub enum ExchangeStatus {
     Initializing,
     Running,

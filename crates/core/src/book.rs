@@ -104,6 +104,14 @@ impl LocalBook {
     pub fn top_n_bid(&self, n: usize) -> Vec<BookLevel> {
         self.bid.values().take(n).copied().collect()
     }
+
+    pub fn ask_len(&self) -> usize {
+        self.ask.len()
+    }
+
+    pub fn bid_len(&self) -> usize {
+        self.bid.len()
+    }
 }
 
 #[derive(Error, Debug)]
