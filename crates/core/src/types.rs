@@ -1,6 +1,6 @@
 use std::{error::Error, fmt};
-
 use rust_decimal::Decimal;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Price(pub Decimal);
 
@@ -28,7 +28,7 @@ impl fmt::Display for Instrument {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Exchange {
     Binance,
     Bybit,
@@ -44,7 +44,7 @@ impl fmt::Display for Exchange {
             Exchange::Bybit => write!(f, "Bybit"),
             Exchange::Coinbase => write!(f, "Coinbase"),
             Exchange::Kraken => write!(f, "Kraken"),
-            Exchange::Okx => write!(f, "Okx")
+            Exchange::Okx => write!(f, "OKX")
         }
     }
 }

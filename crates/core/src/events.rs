@@ -1,6 +1,6 @@
-use std::time::Instant;
+use std::{sync::mpsc::Sender, time::Instant};
 
-use crate::{book::{BookSnapshot, BookUpdate}, types::{Exchange, ExchangeStatus, Instrument}};
+use crate::{book::{BookLevel, BookSnapshot, BookUpdate}, types::{Exchange, ExchangeStatus, Instrument}};
 
 pub struct NormalizedSnapshot {
     pub instrument: Instrument,
@@ -16,13 +16,27 @@ pub struct NormalizedUpdate {
 
 pub struct NormalizedTop {
     pub instrument: Instrument,
-    pub n: usize
+    pub n: usize,
+    pub reply_to: Sender<Vec<BookLevel>>
+}
+
+pub enum NormalizedQuery {
+    TopAsk(NormalizedTop),
+    TopBid(NormalizedTop)
 }
 
 pub enum NormalizedEvent {
-    TopAsk(Exchange, NormalizedTop),
-    TopBid(Exchange, NormalizedTop),
-    Status(Exchange, ExchangeStatus),
-    Snapshot(Exchange, NormalizedSnapshot),
-    Update(Exchange, NormalizedUpdate)
+    Query(NormalizedQuery),
+    Status(ExchangeStatus),
+    Snapshot(NormalizedSnapshot),
+    Update(NormalizedUpdate)
+}
+
+pub struct EventEnvelope {
+    pub exchange: Exchange,
+    pub event: NormalizedEvent
+}
+
+pub enum ControlEvent {
+    Resync
 }
