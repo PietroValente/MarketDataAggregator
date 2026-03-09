@@ -1,4 +1,5 @@
 use std::{error::Error, fmt};
+use bytes::Bytes;
 use rust_decimal::Decimal;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -54,4 +55,8 @@ pub enum ExchangeStatus {
     Initializing,
     Running,
     Error(Box<dyn Error>)
+}
+
+pub struct RawMdMsg {
+    pub payload: Bytes,
 }
