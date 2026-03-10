@@ -1,4 +1,6 @@
-use bytes::Bytes;
+use std::error::Error;
+use std::sync::Arc;
+
 use tokio::{net::TcpStream, task::JoinHandle};
 use tokio::sync::mpsc::Sender;
 use tokio_tungstenite::{tungstenite::Message, MaybeTlsStream, WebSocketStream};
@@ -11,7 +13,7 @@ use crate::types::RawMdMsg;
 
 pub enum WriteCommand {
     Raw(Message),
-    Ping
+    Pong(Vec<u8>)
 }
 
 // specifico avra' Vec<ConnectionTask>
@@ -23,14 +25,16 @@ pub struct ConnectionTasks {
 
 #[allow(async_fn_in_trait)]
 pub trait ExchangeConnector {
-    fn new(rest_url: Url, ws_url: Url, max_subscription_per_ws: usize) -> Self; //call build_subscription inside
-    fn build_subscriptions(rest_url: &Url) -> Vec<Message>; //create Vec<Message> ready to be sent
-    fn subscribe_streams(&mut self); //subscribe to all messages, creates one reader_task/writer_task for each ws creato, salva tutti i reader_task/writer_task handler in un vettore
+    type SubscriptionPayload;
+
+    async fn get_subscriptions_list(rest_url: &Url) -> Result<Vec<String>, Box<dyn Error>>;
+    async fn build_subscriptions(rest_url: &Url, max_subscription_per_ws: usize) -> Result<Vec<Self::SubscriptionPayload>, Box<dyn Error>>; //create Vec<Message> ready to be sent
+    async fn subscribe_streams(&mut self) -> Result<(), Box<dyn Error>>; //subscribe to all messages, creates one reader_task/writer_task for each ws creato, salva tutti i reader_task/writer_task handler in un vettore
     fn abort_streams(&mut self); //abort all readers and writers through handlers.abort()
-    fn start(&mut self); // is the only func the user calls, at the beginning calls subscribe_streams, inside loop receiver on InboundEvents
-    fn ping_all(&self);
+    async fn pong_all(&self, payload: Vec<u8>) -> Result<(), Box<dyn Error>>;
+    async fn start(&mut self); // is the only func the user calls, at the beginning calls subscribe_streams, inside loop receiver on InboundEvents
     async fn reader_task(
-        ws_url: &Url,
+        ws_url: Arc<Url>,
         mut stream: SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>,
         unified_tx: Sender<InboundEvent>,
     ) {
@@ -45,14 +49,14 @@ pub trait ExchangeConnector {
                             }
                         },
                         Message::Text(text) => {
-                            let payload = Bytes::from(text);
+                            let payload = text.into_bytes();
                             if let Err(e) = unified_tx.send(InboundEvent::WsMessage(RawMdMsg{payload})).await {
                                 error!(url = ?ws_url, error = ?e, "unified transmitter error");
                                 break;
                             }
                         },
-                        Message::Ping(_) => {
-                            if let Err(e) = unified_tx.send(InboundEvent::Ping).await {
+                        Message::Ping(payload) => {
+                            if let Err(e) = unified_tx.send(InboundEvent::Ping(payload)).await {
                                 error!(url = ?ws_url, error = ?e, "unified transmitter error");
                                 break;
                             }
@@ -80,13 +84,13 @@ pub trait ExchangeConnector {
         }
     }
     async fn writer_task(
-        ws_url: &Url,
+        ws_url: Arc<Url>,
         mut sink: SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>,
         mut rx: tokio::sync::mpsc::Receiver<WriteCommand>,
     ) {
         while let Some(cmd) = rx.recv().await {
             let result = match cmd {
-                WriteCommand::Ping => sink.send(Message::Ping(Vec::new().into())).await,
+                WriteCommand::Pong(payload) => sink.send(Message::Pong(payload)).await,
                 WriteCommand::Raw(msg) => sink.send(msg).await
             };
     

@@ -1,5 +1,4 @@
 use std::{error::Error, fmt};
-use bytes::Bytes;
 use rust_decimal::Decimal;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -17,6 +16,12 @@ pub struct Qty(pub Decimal);
 impl fmt::Display for Qty {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
+    }
+}
+
+impl Qty {
+    pub fn is_zero(&self) -> bool {
+        self.0.is_zero()
     }
 }
 
@@ -57,6 +62,7 @@ pub enum ExchangeStatus {
     Error(Box<dyn Error>)
 }
 
+#[derive(Debug)]
 pub struct RawMdMsg {
-    pub payload: Bytes,
+    pub payload: Vec<u8>,
 }

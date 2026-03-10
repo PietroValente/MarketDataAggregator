@@ -73,25 +73,41 @@ impl LocalBook {
         }
         self.update_id = update.last_update_id;
         for (price, qty) in update.asks {
-            self.upsert_ask(price, qty);
+            if qty.is_zero() {
+                self.remove_ask(price);
+            } else {
+                self.upsert_ask(price, qty);
+            }
         }
         for (price, qty) in update.bids {
-            self.upsert_bid(price, qty);
+            if qty.is_zero() {
+                self.remove_bid(price);
+            } else {
+                self.upsert_bid(price, qty);
+            }
         }
         Ok(())
     }
 
-    pub fn upsert_ask(&mut self, price: Price, qty: Qty) {
+    fn upsert_ask(&mut self, price: Price, qty: Qty) {
         let lvl = BookLevel::new(qty, price);
         *self.ask.entry(price).or_insert(lvl) = lvl;
     }
 
-    pub fn upsert_bid(&mut self, price: Price, qty: Qty) {
+    fn upsert_bid(&mut self, price: Price, qty: Qty) {
         let lvl = BookLevel::new(qty, price);
         *self.bid.entry(Reverse(price)).or_insert(lvl) = lvl;
     }
 
-    pub fn clear(&mut self) {
+    fn remove_ask(&mut self, price: Price) -> Option<BookLevel> {
+        self.ask.remove(&price)
+    }
+
+    fn remove_bid(&mut self, price: Price) -> Option<BookLevel> {
+        self.bid.remove(&Reverse(price))
+    }
+
+    fn clear(&mut self) {
         self.ask.clear();
         self.bid.clear();
         self.update_id = 0;

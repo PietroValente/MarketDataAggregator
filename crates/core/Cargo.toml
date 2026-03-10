@@ -5,10 +5,9 @@ edition = "2024"
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
-tokio-tungstenite = "0.27"
+tokio-tungstenite = { version = "0.23", features = ["rustls-tls-native-roots"] }
 rust_decimal = "1.40"
 thiserror = "2.0.18"
-bytes = "1.11.1"
 futures-util = "0.3.32"
 url = "2.5.8"
 tracing = "0.1.44"

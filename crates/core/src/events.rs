@@ -1,5 +1,4 @@
 use std::{sync::mpsc::Sender, time::Instant};
-
 use crate::{book::{BookLevel, BookSnapshot, BookUpdate}, types::{Exchange, ExchangeStatus, Instrument, RawMdMsg}};
 
 pub struct NormalizedSnapshot {
@@ -41,8 +40,9 @@ pub enum ControlEvent {
     Resync
 }
 
+#[derive(Debug)]
 pub enum InboundEvent {
     WsMessage(RawMdMsg),
-    Ping,
+    Ping(Vec<u8>),
     ConnectionClosed
 }
