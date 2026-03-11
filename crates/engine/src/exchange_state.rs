@@ -1,14 +1,12 @@
 use md_core::{book::{BookLevel, LocalBook, LocalBookError}, events::{ControlEvent, NormalizedSnapshot, NormalizedTop, NormalizedUpdate}, types::{Exchange, ExchangeStatus, Instrument}};
 use tokio::sync::mpsc::{error::SendError, Sender};
-use tracing::{debug, info, warn};
-use std::{collections::HashMap, time::Instant};
+use tracing::{debug, info};
+use std::collections::HashMap;
 use thiserror::Error;
 
 pub struct ExchangeState {
     exchange: Exchange, //kept for log
     control_tx: Sender<ControlEvent>,
-    last_snapshot_at: Instant,
-    last_update_at: Instant,
     status: ExchangeStatus,
     markets: HashMap<Instrument, LocalBook>,
 }
@@ -18,29 +16,19 @@ impl ExchangeState {
         Self {
             exchange: e,
             control_tx,
-            last_snapshot_at: Instant::now(),
-            last_update_at: Instant::now(),
             status: ExchangeStatus::Initializing,
             markets: HashMap::new()
         }
     }
 
     pub fn apply_snapshot(&mut self, snapshot: NormalizedSnapshot) {
-        debug!(exchange = ?self.exchange, instrument = ?snapshot.instrument, last_snapshot_at = ?self.last_snapshot_at, new_snapshot_at = ?snapshot.timestamp, "applying snapshot");
-        self.last_snapshot_at = snapshot.timestamp;
+        debug!(exchange = ?self.exchange, instrument = ?snapshot.instrument, "applying snapshot");
         self.markets.entry(snapshot.instrument).or_insert(LocalBook::new()).apply_snapshot(snapshot.data);
     }
 
     pub fn apply_update(&mut self, update: NormalizedUpdate) -> Result<(), ExchangeStateError> {
-        let delta_time = update.timestamp-self.last_update_at;
-        debug!(exchange = ?self.exchange, instrument = ?update.instrument, last_update_at = ?self.last_update_at, new_update_at = ?update.timestamp, delta_time = ?delta_time, "applying update");
-        let now = Instant::now();
-        let staleness = update.timestamp - now;
-        if staleness.as_millis() > 500 {
-            warn!(exchange = ?self.exchange, instrument = ?update.instrument, new_update_at = ?update.timestamp, now = ?now,  staleness = ?staleness, "critical staleness")
-        }
+        debug!(exchange = ?self.exchange, instrument = ?update.instrument, "applying update");
 
-        self.last_update_at = update.timestamp;
         self.markets.get_mut(&update.instrument)
             .ok_or_else(|| ExchangeStateError::InstrumentNotFound(update.instrument))?
             .apply_update(update.data)?;

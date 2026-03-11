@@ -25,17 +25,19 @@ impl BookLevel {
     }
 }
 
+#[derive(Debug)]
 pub struct BookSnapshot {
-    last_update_id: u64,
-    bids: Vec<(Price, Qty)>,
-    asks: Vec<(Price, Qty)>,
+    pub last_update_id: u64,
+    pub bids: Vec<(Price, Qty)>,
+    pub asks: Vec<(Price, Qty)>,
 }
 
+#[derive(Debug)]
 pub struct BookUpdate {
-    first_update_id: u64,
-    last_update_id: u64,
-    bids: Vec<(Price, Qty)>,
-    asks: Vec<(Price, Qty)>,
+    pub first_update_id: u64,
+    pub last_update_id: u64,
+    pub bids: Vec<(Price, Qty)>,
+    pub asks: Vec<(Price, Qty)>,
 }
 
 pub struct LocalBook {

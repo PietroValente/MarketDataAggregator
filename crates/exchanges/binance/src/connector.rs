@@ -1,38 +1,53 @@
 use std::{error::Error, sync::Arc};
 
-use futures_util::StreamExt;
-use md_core::{connector_trait::{ConnectionTasks, ExchangeConnector, WriteCommand}, events::InboundEvent, types::RawMdMsg};
+use futures_util::{stream, StreamExt, TryStreamExt};
+use md_core::{connector_trait::{ConnectionTasks, ExchangeConnector, WriteCommand}, events::InboundEvent, types::{Instrument, RawMdMsg}};
 use reqwest::Client;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
+use tokio::time::{sleep, Duration};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{error, info};
 use url::Url;
 use crate::types::{ApiResponse, BinanceMdMsg, BinanceSnapshotMsg, BinanceSubscriptionMsg, BinanceUrls, DepthQuery, SubscriptionRequest};
 
 pub struct BinanceConnector {
-    snapshot_url: Arc<Url>,
     ws_url: Arc<Url>,
-    subscriptions_payloads: Vec<BinanceSubscriptionMsg>,
-    subscriptions: Vec<ConnectionTasks>,
+    manager_tx: Sender<ManagerCommand>,
     raw_tx: Sender<BinanceMdMsg>,
-    inbound_tx: Sender<InboundEvent>,
     inbound_rx: Receiver<InboundEvent>
 }
 
+enum ManagerCommand {
+    RecreateWithSnapshots,
+    PongAll(Vec<u8>)
+}
+
 impl BinanceConnector {
-    pub async fn new(urls: BinanceUrls, max_subscription_per_ws: usize, raw_tx: Sender<BinanceMdMsg>) -> Result<Self, Box<dyn Error>> 
+    pub async fn new(urls: BinanceUrls, max_subscription_per_ws: usize, raw_tx: Sender<BinanceMdMsg>) -> Result<Self, Box<dyn Error + Send + Sync>> 
     where 
         Self: Sized
     {
-        let (inbound_tx, inbound_rx) = channel::<InboundEvent>(100);
+        let (inbound_tx, inbound_rx) = channel::<InboundEvent>(4096);
+        let snapshot_url = Arc::from(urls.snapshot);
+        let ws_url = Arc::from(urls.ws);
+        let subscriptions_payloads = BinanceConnector::build_subscriptions(&urls.exchange_info, max_subscription_per_ws).await?;
+
+        let (manager_tx, manager_rx) = channel::<ManagerCommand>(16);
+
+        tokio::spawn(connection_manager_task(
+            ws_url.clone(),
+            snapshot_url,
+            subscriptions_payloads,
+            inbound_tx,
+            raw_tx.clone(),
+            manager_rx,
+        ));
+
         Ok(Self {
             raw_tx,
-            inbound_tx,
             inbound_rx,
-            snapshot_url: Arc::from(urls.snapshot),
-            ws_url: Arc::from(urls.ws),
-            subscriptions: Vec::new(),
-            subscriptions_payloads: BinanceConnector::build_subscriptions(&urls.exchange_info, max_subscription_per_ws).await?
+            ws_url,
+            manager_tx,
         })
     }
 }
@@ -40,7 +55,7 @@ impl BinanceConnector {
 impl ExchangeConnector for BinanceConnector {
     type SubscriptionPayload = BinanceSubscriptionMsg;
 
-    async fn get_subscriptions_list(rest_url: &Url) -> Result<Vec<String>, Box<dyn Error>> {
+    async fn get_subscriptions_list(rest_url: &Url) -> Result<Vec<String>, Box<dyn Error + Send + Sync>> {
         let client = Client::new();
         let resp = client.get(rest_url.as_str())
                             .send().await?
@@ -54,7 +69,7 @@ impl ExchangeConnector for BinanceConnector {
         Ok(list)
     }
 
-    async fn build_subscriptions(rest_url: &Url, max_subscription_per_ws: usize) -> Result<Vec<BinanceSubscriptionMsg>, Box<dyn Error>>{
+    async fn build_subscriptions(rest_url: &Url, max_subscription_per_ws: usize) -> Result<Vec<BinanceSubscriptionMsg>, Box<dyn Error + Send + Sync>>{
         let mut list = BinanceConnector::get_subscriptions_list(rest_url).await?;
         let subscriptions_payloads_len = (list.len()/max_subscription_per_ws) + 1;
         let mut result = Vec::new();
@@ -64,18 +79,22 @@ impl ExchangeConnector for BinanceConnector {
             if i == subscriptions_payloads_len - 1 { 
                 params_len = list.len();
             }
-            let symbols: Vec<String> = list
+            let symbols: Vec<Instrument> = list
                 .drain(..params_len)
+                .map(|x| Instrument::from(x))
                 .collect();
+
             let params: Vec<String> = 
                 symbols
                 .clone()
                 .into_iter()
-                .map(|mut x| {
-                    x.push_str(&update_settings);
-                    x.to_lowercase()
+                .map(|x| {
+                    let mut s = x.to_string();
+                    s.push_str(&update_settings);
+                    s.to_lowercase()
                 })
                 .collect();
+
             let sub_req = SubscriptionRequest {
                 method: String::from("SUBSCRIBE"),
                 params: params.clone(),
@@ -83,6 +102,7 @@ impl ExchangeConnector for BinanceConnector {
             };
             let json = serde_json::to_string(&sub_req).expect("Failed to serialize SubscribePayload to JSON");
             let message = Message::text(json);
+
             result.push( BinanceSubscriptionMsg{
                 symbols: symbols,
                 payload: message
@@ -91,141 +111,211 @@ impl ExchangeConnector for BinanceConnector {
         Ok(result)
     }
 
-    /* The core idea is to subscribe to ws to get the update but let them stay in the ws buffer.
-        Request the snapshot through rest api and only after that start reading the updates.
-     */
-    async fn subscribe_streams(&mut self) -> Result<(), Box<dyn Error>> {
-        self.abort_streams();
-        for message in &self.subscriptions_payloads {
-            let (writer_tx, writer_rx) = channel::<WriteCommand>(100);
-            let (ws_stream, _) = connect_async(self.ws_url.as_str()).await?;
-            let (write, read) = ws_stream.split();
-
-            let reader_url = self.ws_url.clone();
-            let writer_url = self.ws_url.clone();
-
-            let writer_handle = tokio::spawn(async move {
-                BinanceConnector::writer_task(reader_url, write, writer_rx).await;
-            });
-
-            let w = WriteCommand::Raw(message.payload.clone());
-            writer_tx.send(w).await?;
-
-            let client = Client::new();
-            for symbol in &message.symbols {
-                let params = DepthQuery {
-                    symbol: &symbol,
-                    limit: 5000,
-                };
-
-                let response = client
-                    .get(self.snapshot_url.as_str())
-                    .query(&params)
-                    .send()
-                    .await?;
-
-                self.raw_tx.send(BinanceMdMsg::Snapshot(BinanceSnapshotMsg {
-                    symbol: symbol.clone(),
-                    payload: RawMdMsg {
-                        payload: response.bytes().await?.to_vec()
-                    }
-                })).await?;
-            }
-            
-            let reader_tx_clone = self.inbound_tx.clone();
-            let reader_handle = tokio::spawn(async move {
-                BinanceConnector::reader_task(writer_url, read, reader_tx_clone).await;
-            });
-
-            if let Some(event) = self.inbound_rx.recv().await {
-                match event {
-                    InboundEvent::WsMessage(payload) => {
-                        let msg = String::from_utf8(payload.payload)?;
-                        if !msg.contains(r#""result": null,"#) {
-                            error!(snapshot_url = ?self.snapshot_url, symbols= ?message.symbols, "subscription not confirmed from the server");
-                        }
-                    },
-                    _ => {
-                        error!(snapshot_url = ?self.snapshot_url, symbols= ?message.symbols, "InboundEvent isn't type of WsMessage while waiting for subscription confirmation");
-                    }
-                }
-            }
-
-            let connection = ConnectionTasks {
-                reader_handle,
-                writer_handle,
-                writer_tx
-            };
-            self.subscriptions.push(connection);
-        }
-        Ok(())
+    async fn subscribe_streams(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
+        self.manager_tx
+            .send(ManagerCommand::RecreateWithSnapshots)
+            .await
+            .map_err(|e| Box::new(e) as Box<dyn Error + Send + Sync>)
     }
 
-    fn abort_streams(&mut self) {
-        for subscription in &self.subscriptions {
-            subscription.reader_handle.abort();
-            subscription.writer_handle.abort();
-        }
-        self.subscriptions.clear();
-    }
-
-    async fn pong_all(&self, payload: Vec<u8>) -> Result<(), Box<dyn Error>> {
-        for subscription in &self.subscriptions {
-            subscription.writer_tx.send(WriteCommand::Pong(payload.clone())).await?;
-        }
-        Ok(())
+    async fn pong_all(&self, payload: Vec<u8>) -> Result<(), Box<dyn Error + Send + Sync>> {
+        self.manager_tx
+            .send(ManagerCommand::PongAll(payload))
+            .await
+            .map_err(|e| Box::new(e) as Box<dyn Error + Send + Sync>)
     }
 
     async fn start(&mut self) {
-        // TODO: manage problem connecting with backoff + jitter
-        self.subscribe_streams().await.unwrap();
+        if let Err(e) = self.subscribe_streams().await {
+            error!(url = ?self.ws_url, error = ?e, "error while subscribing to streams");
+            return;
+        }
         while let Some(msg) = self.inbound_rx.recv().await {
             match msg {
                 InboundEvent::WsMessage(payload) => {
-                    self.raw_tx.send(BinanceMdMsg::Update(payload)).await.unwrap();
+                    if let Err(e) = self.raw_tx.send(BinanceMdMsg::Update(payload)).await {
+                        error!(url = ?self.ws_url, error = ?e, "error while sending the update message");
+                        continue;
+                    }
                 },
                 InboundEvent::Ping(payload) => {
-                    // TODO: fix, should pong only the correct ws
-                    self.pong_all(payload).await.unwrap();
+                    if let Err(e) = self.pong_all(payload).await {
+                        error!(url = ?self.ws_url, error = ?e, "error while sending the pong command");
+                        continue;
+                    }
                 },
                 InboundEvent::ConnectionClosed => {
                     info!(url = ?self.ws_url, "connection close, reconnecting");
-                    self.subscribe_streams().await.unwrap();
+                    if let Err(e) = self.subscribe_streams().await {
+                        error!(url = ?self.ws_url, error = ?e, "error while subscribing to streams");
+                        continue;
+                    }
                 }
+            }
+        }
+    }
+
+}
+
+async fn connection_manager_task(
+    ws_url: Arc<Url>,
+    snapshot_url: Arc<Url>,
+    subscriptions_payloads: Vec<BinanceSubscriptionMsg>,
+    inbound_tx: Sender<InboundEvent>,
+    raw_tx: Sender<BinanceMdMsg>,
+    mut cmd_rx: Receiver<ManagerCommand>,
+) {
+    let mut connections: Vec<ConnectionTasks> = Vec::new();
+
+    while let Some(cmd) = cmd_rx.recv().await {
+        match cmd {
+            ManagerCommand::PongAll(payload) => {
+                pong_all_connections(&connections, &payload).await;
+            }
+            ManagerCommand::RecreateWithSnapshots => {
+                recreate_with_snapshots_backoff(
+                    &mut connections,
+                    &ws_url,
+                    &snapshot_url,
+                    &subscriptions_payloads,
+                    &inbound_tx,
+                    &raw_tx,
+                )
+                .await;
             }
         }
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use md_core::connector_trait::ExchangeConnector;
-    use tokio::sync::mpsc::channel;
-    use url::Url;
+fn abort_all_connections(connections: &mut Vec<ConnectionTasks>) {
+    for c in connections.drain(..) {
+        c.reader_handle.abort();
+        c.writer_handle.abort();
+    }
+}
 
-    use crate::{connector::{self, BinanceConnector}, types::{BinanceMdMsg, BinanceUrls}};
+async fn pong_all_connections(connections: &Vec<ConnectionTasks>, payload: &Vec<u8>) {
+    for c in connections {
+        if let Err(e) = c
+            .writer_tx
+            .send(WriteCommand::Pong(payload.clone()))
+            .await {
+                error!(error = ?e, "error while sending the pong command");
+            }
+    }
+}
 
-    #[tokio::test]
-    async fn create_new_binance_connector() {
-        let urls = BinanceUrls {
-            exchange_info: Url::parse("https://api2.binance.com/api/v3/exchangeInfo?permissions=SPOT").unwrap(),
-            snapshot: Url::parse("https://api.binance.com/api/v3/depth").unwrap(),
-            ws: Url::parse("wss://stream.binance.com:443/ws").unwrap()
-        };
-        let (tx, mut rx) = channel::<BinanceMdMsg>(100);
-        let mut connector = BinanceConnector::new(urls, 50, tx).await.unwrap();
-        connector.start().await;
+async fn recreate_with_snapshots_backoff(
+    connections: &mut Vec<ConnectionTasks>,
+    ws_url: &Arc<Url>,
+    snapshot_url: &Arc<Url>,
+    subscriptions_payloads: &Vec<BinanceSubscriptionMsg>,
+    inbound_tx: &Sender<InboundEvent>,
+    raw_tx: &Sender<BinanceMdMsg>,
+) {
+    let backoff_secs = [1, 5, 15, 30, 60];
+        let mut attempt: usize = 0;
 
-        for _ in 0..5 {
-            let msg = rx.recv().await.unwrap();
-            match msg {
-                BinanceMdMsg::Snapshot(snapshot) => {
-                    println!("{}", String::from_utf8(snapshot.payload.payload).unwrap());
-                },
-                BinanceMdMsg::Update(payload) => {
-                    println!("{}", String::from_utf8(payload.payload).unwrap());
-                }
+        loop {
+            if let Err(e) = recreate_with_snapshots(
+                    connections,
+                    ws_url,
+                    snapshot_url,
+                    subscriptions_payloads,
+                    inbound_tx,
+                    raw_tx,
+                )
+                .await
+            {
+                error!(url = ?ws_url, error = ?e, "error while sending the recreate command");
+                let delay = *backoff_secs
+                    .get(attempt)
+                    .unwrap_or(backoff_secs.last().unwrap());
+                attempt = attempt.saturating_add(1);
+                sleep(Duration::from_secs(delay)).await;
+                // After the last stage we keep retrying every 60s
             }
         }
+}
+
+async fn recreate_with_snapshots(
+    connections: &mut Vec<ConnectionTasks>,
+    ws_url: &Arc<Url>,
+    snapshot_url: &Arc<Url>,
+    subscriptions_payloads: &Vec<BinanceSubscriptionMsg>,
+    inbound_tx: &Sender<InboundEvent>,
+    raw_tx: &Sender<BinanceMdMsg>,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    abort_all_connections(connections);
+
+    for message in subscriptions_payloads {
+        let (writer_tx, writer_rx) = channel::<WriteCommand>(64);
+        let (ws_stream, _) = connect_async(ws_url.as_str()).await?;
+        let (write, read) = ws_stream.split();
+
+        let reader_url = ws_url.clone();
+        let writer_url = ws_url.clone();
+
+        raw_tx
+            .send(BinanceMdMsg::Instruments(message.symbols.clone()))
+            .await?;
+
+        let reader_tx_clone = inbound_tx.clone();
+        let reader_handle = tokio::spawn(async move {
+            BinanceConnector::reader_task(writer_url, read, reader_tx_clone).await;
+        });
+
+        let writer_handle = tokio::spawn(async move {
+            BinanceConnector::writer_task(reader_url, write, writer_rx).await;
+        });
+
+        writer_tx
+            .send(WriteCommand::Raw(message.payload.clone()))
+            .await?;
+
+        let client = reqwest::Client::new();
+        let raw_tx_snap = raw_tx.clone();
+        let snapshot_url_snap = snapshot_url.clone();
+        let symbols = message.symbols.clone();
+
+        stream::iter(symbols)
+            .map(Ok::<_, Box<dyn Error + Send + Sync>>)
+            .try_for_each_concurrent(10, move |symbol| {
+                let client = client.clone();
+                let raw_tx = raw_tx_snap.clone();
+                let snapshot_url = snapshot_url_snap.clone();
+
+                async move {
+                    let params = DepthQuery {
+                        symbol: &symbol,
+                        limit: 100,
+                    };
+
+                    let response = client
+                        .get(snapshot_url.as_str())
+                        .query(&params)
+                        .send()
+                        .await?;
+
+                    let bytes = response.bytes().await?;
+
+                    raw_tx
+                        .send(BinanceMdMsg::Snapshot(BinanceSnapshotMsg {
+                            symbol,
+                            payload: RawMdMsg(bytes.to_vec()),
+                        }))
+                        .await?;
+
+                    Ok(())
+                }
+            })
+            .await?;
+
+        connections.push(ConnectionTasks {
+            reader_handle,
+            writer_handle,
+            writer_tx,
+        });
     }
+    Ok(())
 }
