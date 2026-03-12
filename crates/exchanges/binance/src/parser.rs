@@ -68,7 +68,10 @@ impl BinanceParser {
                 },
                 BinanceMdMsg::Update(payload) => {
                     let Ok(parsed_update) = serde_json::from_slice::<DepthUpdate>(&payload) else {
-                        error!(exchange = "binance", component = "parser", text = ?String::from_utf8(payload.clone()).unwrap(), "error while parsing update");
+                        let text = String::from_utf8(payload.clone()).unwrap();
+                        if !text.contains(r#""result": null,"#) { //subscription confirmation message
+                            error!(exchange = "binance", component = "parser", text = ?text, "error while parsing update");
+                        }
                         continue;
                     };
 

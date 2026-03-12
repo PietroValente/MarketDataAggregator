@@ -11,7 +11,6 @@ use url::Url;
 use crate::types::{ApiResponse, BinanceMdMsg, BinanceSnapshotMsg, BinanceSubscriptionMsg, BinanceUrls, DepthQuery, SubscriptionRequest};
 
 pub struct BinanceConnector {
-    ws_url: Arc<Url>,
     manager_tx: Sender<ManagerCommand>,
     raw_tx: Sender<BinanceMdMsg>,
     inbound_rx: Receiver<InboundEvent>
@@ -20,6 +19,7 @@ pub struct BinanceConnector {
 enum ManagerCommand {
     InsertSubscription(u8, ConnectionTasks),
     RecreateWithSnapshots,
+    RecreateFinished,
     Pong(PingMsg)
 }
 
@@ -33,7 +33,7 @@ impl BinanceConnector {
         let ws_url = Arc::from(urls.ws);
         let subscriptions_payloads = Arc::new(BinanceConnector::build_subscriptions(&urls.exchange_info, max_subscription_per_ws).await?);
 
-        let (manager_tx, manager_rx) = channel::<ManagerCommand>(16);
+        let (manager_tx, manager_rx) = channel::<ManagerCommand>(128);
 
         tokio::spawn(connection_manager_task(
             ws_url.clone(),
@@ -53,7 +53,6 @@ impl BinanceConnector {
         Ok(Self {
             raw_tx,
             inbound_rx,
-            ws_url,
             manager_tx,
         })
     }
@@ -134,27 +133,27 @@ impl ExchangeConnector for BinanceConnector {
 
     async fn start(&mut self) {
         if let Err(e) = self.subscribe_streams().await {
-            error!(url = ?self.ws_url, error = ?e, "error while subscribing to streams");
+            error!(exchange = "binance", component = "connector", error = ?e, "error while subscribing to streams");
             return;
         }
         while let Some(msg) = self.inbound_rx.recv().await {
             match msg {
                 InboundEvent::WsMessage(payload) => {
                     if let Err(e) = self.raw_tx.send(BinanceMdMsg::Update(payload)).await {
-                        error!(url = ?self.ws_url, error = ?e, "error while sending the update message");
+                        error!(exchange = "binance", component = "connector", error = ?e, "error while sending the update message");
                         continue;
                     }
                 },
                 InboundEvent::Ping(ping_msg) => {
                     if let Err(e) = self.pong(ping_msg).await {
-                        error!(url = ?self.ws_url, error = ?e, "error while sending the pong command");
+                        error!(exchange = "binance", component = "connector", error = ?e, "error while sending the pong command");
                         continue;
                     }
                 },
                 InboundEvent::ConnectionClosed => {
-                    info!(url = ?self.ws_url, "connection close, reconnecting");
+                    info!(exchange = "binance", component = "connector", "connection close, reconnecting");
                     if let Err(e) = self.subscribe_streams().await {
-                        error!(url = ?self.ws_url, error = ?e, "error while subscribing to streams");
+                        error!(exchange = "binance", component = "connector", error = ?e, "error while subscribing to streams");
                         continue;
                     }
                 }
@@ -171,7 +170,7 @@ async fn control_manager_task(mut control_rx: Receiver<ControlEvent>, manager_tx
                 if let Err(e) = manager_tx
                     .send(ManagerCommand::RecreateWithSnapshots)
                     .await {
-                        error!(exchange = "binance", error = ?e, "failed to send RecreateWithSnapshots command to manager");
+                        error!(exchange = "binance", component = "connector", error = ?e, "failed to send RecreateWithSnapshots command to manager");
                     }
             }
         }
@@ -188,9 +187,13 @@ async fn connection_manager_task(
     mut cmd_rx: Receiver<ManagerCommand>,
 ) {
     let mut connections: HashMap<u8, ConnectionTasks> = HashMap::new();
+    let mut recreate_in_progress = false;
 
     while let Some(cmd) = cmd_rx.recv().await {
         match cmd {
+            ManagerCommand::RecreateFinished => {
+                recreate_in_progress = false;
+            },
             ManagerCommand::InsertSubscription(ws_id, connection) => {
                 connections.insert(ws_id, connection);
             },
@@ -198,7 +201,14 @@ async fn connection_manager_task(
                 pong_ws(&connections, msg).await;
             }
             ManagerCommand::RecreateWithSnapshots => {
+                if recreate_in_progress {
+                    info!(exchange = "binance", component = "connector", "recreate already in progress, skipping");
+                    continue;
+                }
+
+                recreate_in_progress = true;
                 abort_all_connections(&mut connections);
+
                 tokio::spawn(recreate_with_snapshots_backoff(
                     ws_url.clone(),
                     snapshot_url.clone(),
@@ -226,10 +236,10 @@ async fn pong_ws(connections: &HashMap<u8, ConnectionTasks>, msg: PingMsg) {
             .send(WriteCommand::Pong(msg.payload))
             .await
         {
-            error!(error = ?e, ws_id = msg.ws_id, "error while sending the pong command");
+            error!(exchange = "binance", component = "connector", error = ?e, "error while sending the pong command");
         }
     } else {
-        error!(ws_id = msg.ws_id, "pong requested for unknown connection");
+        error!(exchange = "binance", component = "connector", "pong requested for unknown connection");
     }
 }
 
@@ -254,10 +264,13 @@ async fn recreate_with_snapshots_backoff(
             cmd_tx.clone()
         ).await {
             Ok(()) => {
+                if let Err(e) = cmd_tx.send(ManagerCommand::RecreateFinished).await {
+                    error!(exchange = "binance", component = "connector", error = ?e, "failed to notify recreate finished");
+                }
                 return;
             }
             Err(e) => {
-                error!(url = ?ws_url, error = ?e, "error while recreating connections");
+                error!(exchange = "binance", component = "connector", error = ?e, "error while recreating connections");
                 let delay = *backoff_secs
                     .get(attempt)
                     .unwrap_or(backoff_secs.last().unwrap());
@@ -298,17 +311,15 @@ async fn recreate_with_snapshots(
             BinanceConnector::writer_task(reader_url, write, writer_rx).await;
         });
 
+        cmd_tx.send( ManagerCommand::InsertSubscription(ws_id, ConnectionTasks {
+            reader_handle,
+            writer_handle,
+            writer_tx: writer_tx.clone(),
+        })).await?;
+
         writer_tx
             .send(WriteCommand::Raw(message.payload.clone()))
             .await?;
-
-        if let Err(e) = cmd_tx.send( ManagerCommand::InsertSubscription(ws_id, ConnectionTasks {
-            reader_handle,
-            writer_handle,
-            writer_tx,
-        })).await {
-            error!(error = ?e, ws_id = ws_id, "error while sending the insert subscription command");
-        }
 
         let client = reqwest::Client::new();
         let raw_tx_snap = raw_tx.clone();
