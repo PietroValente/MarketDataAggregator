@@ -1,7 +1,7 @@
-use std::{error::Error, sync::Arc};
+use std::{collections::HashMap, error::Error, sync::Arc};
 
 use futures_util::{stream, StreamExt, TryStreamExt};
-use md_core::{connector_trait::{ConnectionTasks, ExchangeConnector, WriteCommand}, events::InboundEvent, types::{Instrument, RawMdMsg}};
+use md_core::{connector_trait::{ConnectionTasks, ExchangeConnector, WriteCommand}, events::{ControlEvent, InboundEvent, PingMsg}, types::{Instrument, RawMdMsg}};
 use reqwest::Client;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::time::{sleep, Duration};
@@ -19,11 +19,11 @@ pub struct BinanceConnector {
 
 enum ManagerCommand {
     RecreateWithSnapshots,
-    PongAll(Vec<u8>)
+    Pong(PingMsg)
 }
 
 impl BinanceConnector {
-    pub async fn new(urls: BinanceUrls, max_subscription_per_ws: usize, raw_tx: Sender<BinanceMdMsg>) -> Result<Self, Box<dyn Error + Send + Sync>> 
+    pub async fn new(urls: BinanceUrls, max_subscription_per_ws: usize, raw_tx: Sender<BinanceMdMsg>, control_rx: Receiver<ControlEvent>) -> Result<Self, Box<dyn Error + Send + Sync>> 
     where 
         Self: Sized
     {
@@ -41,6 +41,11 @@ impl BinanceConnector {
             inbound_tx,
             raw_tx.clone(),
             manager_rx,
+        ));
+
+        tokio::spawn(control_manager_task(
+            control_rx, 
+            manager_tx.clone()
         ));
 
         Ok(Self {
@@ -118,9 +123,9 @@ impl ExchangeConnector for BinanceConnector {
             .map_err(|e| Box::new(e) as Box<dyn Error + Send + Sync>)
     }
 
-    async fn pong_all(&self, payload: Vec<u8>) -> Result<(), Box<dyn Error + Send + Sync>> {
+    async fn pong(&self, msg: PingMsg) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.manager_tx
-            .send(ManagerCommand::PongAll(payload))
+            .send(ManagerCommand::Pong(msg))
             .await
             .map_err(|e| Box::new(e) as Box<dyn Error + Send + Sync>)
     }
@@ -138,8 +143,9 @@ impl ExchangeConnector for BinanceConnector {
                         continue;
                     }
                 },
-                InboundEvent::Ping(payload) => {
-                    if let Err(e) = self.pong_all(payload).await {
+                InboundEvent::Ping(ping_msg) => {
+                    println!("ping received");
+                    if let Err(e) = self.pong(ping_msg).await {
                         error!(url = ?self.ws_url, error = ?e, "error while sending the pong command");
                         continue;
                     }
@@ -157,6 +163,20 @@ impl ExchangeConnector for BinanceConnector {
 
 }
 
+async fn control_manager_task(mut control_rx: Receiver<ControlEvent>, manager_tx: Sender<ManagerCommand>) {
+    while let Some(event) = control_rx.recv().await {
+        match event {
+            ControlEvent::Resync => {
+                if let Err(e) = manager_tx
+                    .send(ManagerCommand::RecreateWithSnapshots)
+                    .await {
+                        error!(exchange = "binance", error = ?e, "failed to send RecreateWithSnapshots command to manager");
+                    }
+            }
+        }
+    }
+}
+
 async fn connection_manager_task(
     ws_url: Arc<Url>,
     snapshot_url: Arc<Url>,
@@ -165,12 +185,12 @@ async fn connection_manager_task(
     raw_tx: Sender<BinanceMdMsg>,
     mut cmd_rx: Receiver<ManagerCommand>,
 ) {
-    let mut connections: Vec<ConnectionTasks> = Vec::new();
+    let mut connections: HashMap<u8, ConnectionTasks> = HashMap::new();
 
     while let Some(cmd) = cmd_rx.recv().await {
         match cmd {
-            ManagerCommand::PongAll(payload) => {
-                pong_all_connections(&connections, &payload).await;
+            ManagerCommand::Pong(msg) => {
+                pong_ws(&connections, msg).await;
             }
             ManagerCommand::RecreateWithSnapshots => {
                 recreate_with_snapshots_backoff(
@@ -187,26 +207,30 @@ async fn connection_manager_task(
     }
 }
 
-fn abort_all_connections(connections: &mut Vec<ConnectionTasks>) {
-    for c in connections.drain(..) {
+fn abort_all_connections(connections: &mut HashMap<u8, ConnectionTasks>) {
+    for (_, c) in connections.drain() {
         c.reader_handle.abort();
         c.writer_handle.abort();
     }
 }
 
-async fn pong_all_connections(connections: &Vec<ConnectionTasks>, payload: &Vec<u8>) {
-    for c in connections {
-        if let Err(e) = c
+async fn pong_ws(connections: &HashMap<u8, ConnectionTasks>, msg: PingMsg) {
+    println!("sending pong: {:?}", msg);
+    if let Some(conn) = connections.get(&msg.ws_id) {
+        if let Err(e) = conn
             .writer_tx
-            .send(WriteCommand::Pong(payload.clone()))
-            .await {
-                error!(error = ?e, "error while sending the pong command");
-            }
+            .send(WriteCommand::Pong(msg.payload))
+            .await
+        {
+            error!(error = ?e, ws_id = msg.ws_id, "error while sending the pong command");
+        }
+    } else {
+        error!(ws_id = msg.ws_id, "pong requested for unknown connection");
     }
 }
 
 async fn recreate_with_snapshots_backoff(
-    connections: &mut Vec<ConnectionTasks>,
+    connections: &mut HashMap<u8, ConnectionTasks>,
     ws_url: &Arc<Url>,
     snapshot_url: &Arc<Url>,
     subscriptions_payloads: &Vec<BinanceSubscriptionMsg>,
@@ -239,7 +263,7 @@ async fn recreate_with_snapshots_backoff(
 }
 
 async fn recreate_with_snapshots(
-    connections: &mut Vec<ConnectionTasks>,
+    connections: &mut HashMap<u8, ConnectionTasks>,
     ws_url: &Arc<Url>,
     snapshot_url: &Arc<Url>,
     subscriptions_payloads: &Vec<BinanceSubscriptionMsg>,
@@ -248,7 +272,7 @@ async fn recreate_with_snapshots(
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     abort_all_connections(connections);
 
-    for message in subscriptions_payloads {
+    for (i, message) in subscriptions_payloads.iter().enumerate() {
         let (writer_tx, writer_rx) = channel::<WriteCommand>(64);
         let (ws_stream, _) = connect_async(ws_url.as_str()).await?;
         let (write, read) = ws_stream.split();
@@ -261,8 +285,9 @@ async fn recreate_with_snapshots(
             .await?;
 
         let reader_tx_clone = inbound_tx.clone();
+        let ws_id = i as u8;
         let reader_handle = tokio::spawn(async move {
-            BinanceConnector::reader_task(writer_url, read, reader_tx_clone).await;
+            BinanceConnector::reader_task(ws_id, writer_url, read, reader_tx_clone).await;
         });
 
         let writer_handle = tokio::spawn(async move {
@@ -311,7 +336,7 @@ async fn recreate_with_snapshots(
             })
             .await?;
 
-        connections.push(ConnectionTasks {
+        connections.insert(ws_id, ConnectionTasks {
             reader_handle,
             writer_handle,
             writer_tx,

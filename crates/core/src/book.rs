@@ -2,7 +2,7 @@ use std::{cmp::Reverse, collections::BTreeMap};
 use thiserror::Error;
 use crate::types::{Price, Qty};
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub struct BookLevel {
     qty: Qty,
     px: Price

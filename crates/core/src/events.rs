@@ -1,4 +1,5 @@
-use std::sync::mpsc::Sender;
+use tokio::sync::oneshot::Sender;
+
 use crate::{book::{BookLevel, BookSnapshot, BookUpdate}, types::{Exchange, ExchangeStatus, Instrument, RawMdMsg}};
 
 #[derive(Debug)]
@@ -45,8 +46,14 @@ pub enum ControlEvent {
 }
 
 #[derive(Debug)]
+pub struct PingMsg {
+    pub ws_id: u8,
+    pub payload: Vec<u8>
+}
+
+#[derive(Debug)]
 pub enum InboundEvent {
     WsMessage(RawMdMsg),
-    Ping(Vec<u8>),
+    Ping(PingMsg),
     ConnectionClosed
 }
