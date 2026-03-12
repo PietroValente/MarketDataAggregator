@@ -18,6 +18,7 @@ pub struct BinanceConnector {
 }
 
 enum ManagerCommand {
+    InsertSubscription(u8, ConnectionTasks),
     RecreateWithSnapshots,
     Pong(PingMsg)
 }
@@ -30,7 +31,7 @@ impl BinanceConnector {
         let (inbound_tx, inbound_rx) = channel::<InboundEvent>(4096);
         let snapshot_url = Arc::from(urls.snapshot);
         let ws_url = Arc::from(urls.ws);
-        let subscriptions_payloads = BinanceConnector::build_subscriptions(&urls.exchange_info, max_subscription_per_ws).await?;
+        let subscriptions_payloads = Arc::new(BinanceConnector::build_subscriptions(&urls.exchange_info, max_subscription_per_ws).await?);
 
         let (manager_tx, manager_rx) = channel::<ManagerCommand>(16);
 
@@ -40,6 +41,7 @@ impl BinanceConnector {
             subscriptions_payloads,
             inbound_tx,
             raw_tx.clone(),
+            manager_tx.clone(),
             manager_rx,
         ));
 
@@ -144,7 +146,6 @@ impl ExchangeConnector for BinanceConnector {
                     }
                 },
                 InboundEvent::Ping(ping_msg) => {
-                    println!("ping received");
                     if let Err(e) = self.pong(ping_msg).await {
                         error!(url = ?self.ws_url, error = ?e, "error while sending the pong command");
                         continue;
@@ -180,28 +181,32 @@ async fn control_manager_task(mut control_rx: Receiver<ControlEvent>, manager_tx
 async fn connection_manager_task(
     ws_url: Arc<Url>,
     snapshot_url: Arc<Url>,
-    subscriptions_payloads: Vec<BinanceSubscriptionMsg>,
+    subscriptions_payloads: Arc<Vec<BinanceSubscriptionMsg>>,
     inbound_tx: Sender<InboundEvent>,
     raw_tx: Sender<BinanceMdMsg>,
+    cmd_tx: Sender<ManagerCommand>,
     mut cmd_rx: Receiver<ManagerCommand>,
 ) {
     let mut connections: HashMap<u8, ConnectionTasks> = HashMap::new();
 
     while let Some(cmd) = cmd_rx.recv().await {
         match cmd {
+            ManagerCommand::InsertSubscription(ws_id, connection) => {
+                connections.insert(ws_id, connection);
+            },
             ManagerCommand::Pong(msg) => {
                 pong_ws(&connections, msg).await;
             }
             ManagerCommand::RecreateWithSnapshots => {
-                recreate_with_snapshots_backoff(
-                    &mut connections,
-                    &ws_url,
-                    &snapshot_url,
-                    &subscriptions_payloads,
-                    &inbound_tx,
-                    &raw_tx,
-                )
-                .await;
+                abort_all_connections(&mut connections);
+                tokio::spawn(recreate_with_snapshots_backoff(
+                    ws_url.clone(),
+                    snapshot_url.clone(),
+                    subscriptions_payloads.clone(),
+                    inbound_tx.clone(),
+                    raw_tx.clone(),
+                    cmd_tx.clone()
+                ));
             }
         }
     }
@@ -215,7 +220,6 @@ fn abort_all_connections(connections: &mut HashMap<u8, ConnectionTasks>) {
 }
 
 async fn pong_ws(connections: &HashMap<u8, ConnectionTasks>, msg: PingMsg) {
-    println!("sending pong: {:?}", msg);
     if let Some(conn) = connections.get(&msg.ws_id) {
         if let Err(e) = conn
             .writer_tx
@@ -230,48 +234,48 @@ async fn pong_ws(connections: &HashMap<u8, ConnectionTasks>, msg: PingMsg) {
 }
 
 async fn recreate_with_snapshots_backoff(
-    connections: &mut HashMap<u8, ConnectionTasks>,
-    ws_url: &Arc<Url>,
-    snapshot_url: &Arc<Url>,
-    subscriptions_payloads: &Vec<BinanceSubscriptionMsg>,
-    inbound_tx: &Sender<InboundEvent>,
-    raw_tx: &Sender<BinanceMdMsg>,
+    ws_url: Arc<Url>,
+    snapshot_url: Arc<Url>,
+    subscriptions_payloads: Arc<Vec<BinanceSubscriptionMsg>>,
+    inbound_tx: Sender<InboundEvent>,
+    raw_tx: Sender<BinanceMdMsg>,
+    cmd_tx: Sender<ManagerCommand>,
 ) {
     let backoff_secs = [1, 5, 15, 30, 60];
-        let mut attempt: usize = 0;
+    let mut attempt: usize = 0;
 
-        loop {
-            if let Err(e) = recreate_with_snapshots(
-                    connections,
-                    ws_url,
-                    snapshot_url,
-                    subscriptions_payloads,
-                    inbound_tx,
-                    raw_tx,
-                )
-                .await
-            {
-                error!(url = ?ws_url, error = ?e, "error while sending the recreate command");
+    loop {
+        match recreate_with_snapshots(
+            ws_url.clone(),
+            snapshot_url.clone(),
+            subscriptions_payloads.clone(),
+            inbound_tx.clone(),
+            raw_tx.clone(),
+            cmd_tx.clone()
+        ).await {
+            Ok(()) => {
+                return;
+            }
+            Err(e) => {
+                error!(url = ?ws_url, error = ?e, "error while recreating connections");
                 let delay = *backoff_secs
                     .get(attempt)
                     .unwrap_or(backoff_secs.last().unwrap());
                 attempt = attempt.saturating_add(1);
-                sleep(Duration::from_secs(delay)).await;
-                // After the last stage we keep retrying every 60s
+                sleep(Duration::from_secs(delay)).await; // After the last stage we keep retrying every 60s
             }
         }
+    }
 }
 
 async fn recreate_with_snapshots(
-    connections: &mut HashMap<u8, ConnectionTasks>,
-    ws_url: &Arc<Url>,
-    snapshot_url: &Arc<Url>,
-    subscriptions_payloads: &Vec<BinanceSubscriptionMsg>,
-    inbound_tx: &Sender<InboundEvent>,
-    raw_tx: &Sender<BinanceMdMsg>,
+    ws_url: Arc<Url>,
+    snapshot_url: Arc<Url>,
+    subscriptions_payloads: Arc<Vec<BinanceSubscriptionMsg>>,
+    inbound_tx: Sender<InboundEvent>,
+    raw_tx: Sender<BinanceMdMsg>,
+    cmd_tx: Sender<ManagerCommand>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    abort_all_connections(connections);
-
     for (i, message) in subscriptions_payloads.iter().enumerate() {
         let (writer_tx, writer_rx) = channel::<WriteCommand>(64);
         let (ws_stream, _) = connect_async(ws_url.as_str()).await?;
@@ -297,6 +301,14 @@ async fn recreate_with_snapshots(
         writer_tx
             .send(WriteCommand::Raw(message.payload.clone()))
             .await?;
+
+        if let Err(e) = cmd_tx.send( ManagerCommand::InsertSubscription(ws_id, ConnectionTasks {
+            reader_handle,
+            writer_handle,
+            writer_tx,
+        })).await {
+            error!(error = ?e, ws_id = ws_id, "error while sending the insert subscription command");
+        }
 
         let client = reqwest::Client::new();
         let raw_tx_snap = raw_tx.clone();
@@ -335,12 +347,6 @@ async fn recreate_with_snapshots(
                 }
             })
             .await?;
-
-        connections.insert(ws_id, ConnectionTasks {
-            reader_handle,
-            writer_handle,
-            writer_tx,
-        });
     }
     Ok(())
 }

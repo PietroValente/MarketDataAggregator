@@ -3,7 +3,6 @@ use std::{collections::HashMap, thread};
 use binance::{connector::BinanceConnector, parser::BinanceParser, types::{BinanceMdMsg, BinanceUrls}};
 use engine::Engine;
 use tokio::sync::mpsc::channel;
-use tracing_subscriber::{fmt, EnvFilter};
 use url::Url;
 use md_core::{connector_trait::ExchangeConnector, events::{ControlEvent, EventEnvelope}, types::Exchange};
 
@@ -14,10 +13,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         snapshot: Url::parse("https://api.binance.com/api/v3/depth").unwrap(),
         ws: Url::parse("wss://stream.binance.com:443/ws").unwrap()
     };
-
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env())
-        .init();
 
     let (raw_tx, raw_rx) = channel::<BinanceMdMsg>(4096);
     let (normalized_tx, normalized_rx) = channel::<EventEnvelope>(4096);

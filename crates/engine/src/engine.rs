@@ -68,6 +68,7 @@ impl Engine {
                         }).unwrap();
                         asks.sort_by(|a, b| b.px().partial_cmp(&a.px()).unwrap());
                         bids.sort_by(|a, b| b.px().partial_cmp(&a.px()).unwrap());
+                        print!("\x1B[2J\x1B[1;1H");
                         println!("{}", instrument);
                         for a in asks {
                             println!("{}    {}", a.px(), a.qty());
