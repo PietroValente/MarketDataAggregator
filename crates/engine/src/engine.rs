@@ -1,6 +1,6 @@
 use std::collections::HashMap;
-use md_core::{events::{ControlEvent, EventEnvelope, NormalizedEvent, NormalizedQuery, NormalizedTop}, logging::types::Component, types::{Exchange, Instrument}};
-use tokio::sync::{mpsc::{Receiver, Sender}, oneshot};
+use md_core::{events::{ControlEvent, EventEnvelope, NormalizedEvent, NormalizedQuery}, logging::types::Component, types::Exchange};
+use tokio::sync::mpsc::{Receiver, Sender};
 use tracing::error;
 
 use crate::exchange_state::{ExchangeState, ExchangeStateError};
@@ -37,7 +37,6 @@ impl Engine {
                     exchange_state.apply_snapshot(data)
                 },
                 NormalizedEvent::Update(data) => {
-                    let instrument = data.instrument.clone();
                     if let Err(e) = exchange_state.apply_update(data) {
                         match e {
                             ExchangeStateError::InstrumentNotFound(i) => {
@@ -51,33 +50,6 @@ impl Engine {
                             }
                         }
                     }
-
-                    // DEBUG section
-                    if instrument == Instrument("BTCUSDT".to_string()) {
-                        let (tx, _) = oneshot::channel();
-                        let (tx2, _) = oneshot::channel();
-                        let mut asks = exchange_state.top_n_ask(&NormalizedTop {
-                            instrument: instrument.clone(),
-                            n: 5,
-                            reply_to: tx
-                        }).unwrap();
-                        let mut bids = exchange_state.top_n_bid(&NormalizedTop {
-                            instrument: instrument.clone(),
-                            n: 5,
-                            reply_to: tx2
-                        }).unwrap();
-                        asks.sort_by(|a, b| b.px().partial_cmp(&a.px()).unwrap());
-                        bids.sort_by(|a, b| b.px().partial_cmp(&a.px()).unwrap());
-                        // print!("\x1B[2J\x1B[1;1H");
-                        // println!("{}", instrument);
-                        // for a in asks {
-                        //     println!("{}    {}", a.px(), a.qty());
-                        // }
-                        // println!("--------");
-                        // for b in bids {
-                        //     println!("{}    {}", b.px(), b.qty());
-                        // }
-                    }
                 },
                 NormalizedEvent::Query(query) => {
                     match query {
@@ -90,6 +62,9 @@ impl Engine {
                                 },
                                 Err(e) => {
                                     error!(exchange = ?exchange, component = ?Component::Engine, error = ?e, "top_n_ask error");
+                                    if let Err(e) = data.reply_to.send(Vec::new()) {
+                                        error!(exchange = ?exchange, component = ?Component::Engine, error = ?e, "top_n_ask error")
+                                    }
                                 }
                             }
                         },
@@ -102,6 +77,9 @@ impl Engine {
                                 },
                                 Err(e) => {
                                     error!(exchange = ?exchange, component = ?Component::Engine, error = ?e, "top_n_bid error");
+                                    if let Err(e) = data.reply_to.send(Vec::new()) {
+                                        error!(exchange = ?exchange, component = ?Component::Engine, error = ?e, "top_n_bid error")
+                                    }
                                 }
                             }
                         }

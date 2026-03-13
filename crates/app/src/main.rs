@@ -16,7 +16,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = load_config("config.toml").expect("Load config error");
 
     /* LOGS */
-    let (log_tx, mut log_rx) = tokio::sync::mpsc::channel(config.channels.log_buffer);
+    let (log_tx, _log_rx) = tokio::sync::mpsc::channel(config.channels.log_buffer);
     let layer = DbLoggingLayer::new(log_tx);
     
     tracing_subscriber::registry()
@@ -150,7 +150,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let query_manager = QueryManager::new(normalized_tx);
     thread::spawn(move || {
         query_manager.run();
-    }).join();
+    }).join().unwrap();
 
     Ok(())
 }

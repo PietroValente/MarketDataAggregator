@@ -1,4 +1,4 @@
-use std::{cmp::Reverse, collections::BTreeMap};
+use std::{cmp::Reverse, collections::BTreeMap, fmt::Display};
 use thiserror::Error;
 use crate::types::{Price, Qty};
 
@@ -22,6 +22,12 @@ impl BookLevel {
 
     pub fn px(&self) -> &Price {
         &self.px
+    }
+}
+
+impl Display for BookLevel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}   {}", self.px, self.qty)
     }
 }
 

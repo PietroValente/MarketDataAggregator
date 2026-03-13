@@ -6,3 +6,4 @@ edition = "2024"
 [dependencies]
 md_core = { path = "../core" }
 tokio = { version = "1", features = ["full"] }
+crossterm = "0.28"

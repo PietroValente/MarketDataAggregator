@@ -49,7 +49,7 @@ impl ExchangeState {
     }
 
     pub fn top_n_ask(&self, top: &NormalizedTop) -> Result<Vec<BookLevel>, ExchangeStateError> {
-        let local_book = self.markets.get(&top.instrument).ok_or_else(|| ExchangeStateError::InstrumentNotFound(top.instrument.clone()))?;
+        let local_book = self.markets.get(&top.instrument).ok_or_else(|| {ExchangeStateError::InstrumentNotFound(top.instrument.clone())})?;
         debug!(exchange = ?self.exchange, component = ?Component::ExchangeState, instrument = ?top.instrument, n = top.n, ask_len = local_book.ask_len(),  "top_n_ask");
         Ok(local_book.top_n_ask(top.n))
     }
