@@ -33,7 +33,7 @@ impl BinanceParser {
         }
     }
 
-    pub fn start(&mut self) {
+    pub fn run(&mut self) {
         while let Some(msg) = self.raw_rx.blocking_recv() {
             match msg {
                 BinanceMdMsg::Instruments(list) => {

@@ -1,6 +1,7 @@
 use std::{collections::HashMap, thread};
 use binance::{connector::BinanceConnector, parser::BinanceParser, types::{BinanceMdMsg, BinanceUrls}};
 use engine::Engine;
+use query::query_manager::QueryManager;
 use tokio::sync::mpsc::channel;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use md_core::{connector_trait::ExchangeConnector, events::{ControlEvent, EventEnvelope}, logging::layer::DbLoggingLayer, types::Exchange};
@@ -11,6 +12,7 @@ use url::Url;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    println!("Initializing...");
     let config = load_config("config.toml").expect("Load config error");
 
     /* LOGS */
@@ -21,12 +23,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with(layer)
         .init();
 
-    tokio::spawn(async move {
-        //log_writer(rx).await;
-        while let Some(msg) = log_rx.recv().await {
-            println!("{:?}", msg);
-        }
-    });
+    // tokio::spawn(async move {
+    //     //log_writer(rx).await;
+    //     while let Some(msg) = log_rx.recv().await {
+    //         println!("{:?}", msg);
+    //     }
+    // });
 
     /* CONTROL CHANNELS */
     let mut control_senders = HashMap::new();
@@ -60,7 +62,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // let (kraken_raw_tx, kraken_raw_rx) = channel::<BinanceMdMsg>(config.channels.raw_buffer);
     // let (okx_raw_tx, okx_raw_rx) = channel::<BinanceMdMsg>(config.channels.raw_buffer);
 
-    let mut binance_parser = BinanceParser::new(binance_raw_rx, normalized_tx);
+    let mut binance_parser = BinanceParser::new(binance_raw_rx, normalized_tx.clone());
     // let mut bitget_parser = BitgetParser::new(bitget_raw_rx, normalized_tx);
     // let mut bybit_parser = BybitParser::new(bybit_raw_rx, normalized_tx);
     // let mut coinbase_parser = CoinbaseParser::new(coinbase_raw_rx, normalized_tx);
@@ -68,7 +70,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // let mut okx_parser = OkxParser::new(okx_raw_rx, normalized_tx);
     
     thread::spawn(move || {
-        binance_parser.start();
+        binance_parser.run();
     });
     // thread::spawn(move || {
     //     bitget_parser.start();
@@ -145,6 +147,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // });
 
     /* QUERY MANAGER */
+    let query_manager = QueryManager::new(normalized_tx);
+    thread::spawn(move || {
+        query_manager.run();
+    }).join();
 
     Ok(())
 }

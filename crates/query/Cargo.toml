@@ -1,0 +1,8 @@
+[package]
+name = "query"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+md_core = { path = "../core" }
+tokio = { version = "1", features = ["full"] }
