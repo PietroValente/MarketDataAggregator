@@ -1,0 +1,11 @@
+[binance]
+exchange_info = "https://api2.binance.com/api/v3/exchangeInfo?permissions=SPOT"
+snapshot = "https://api.binance.com/api/v3/depth"
+ws = "wss://stream.binance.com:443/ws"
+max_subscription_per_ws = 50
+
+[channels]
+raw_buffer = 4096
+normalized_buffer = 4096
+control_buffer = 8
+log_buffer = 10000
