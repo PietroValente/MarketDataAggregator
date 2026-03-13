@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use md_core::{events::{ControlEvent, EventEnvelope, NormalizedEvent, NormalizedQuery, NormalizedTop}, types::{Exchange, Instrument}};
+use md_core::{events::{ControlEvent, EventEnvelope, NormalizedEvent, NormalizedQuery, NormalizedTop}, logging::types::Component, types::{Exchange, Instrument}};
 use tokio::sync::{mpsc::{Receiver, Sender}, oneshot};
 use tracing::error;
 
@@ -25,7 +25,7 @@ impl Engine {
         while let Some(event_enveloped) = self.rx.blocking_recv() {
             let EventEnvelope { exchange, event} = event_enveloped;
             let Some(exchange_state) = self.exchanges.get_mut(&exchange) else {
-                error!(exchange = ?exchange, "exchange not found");
+                error!(exchange = ?exchange, component = ?Component::Engine, "exchange not found");
                 continue;
             };
 
@@ -41,12 +41,12 @@ impl Engine {
                     if let Err(e) = exchange_state.apply_update(data) {
                         match e {
                             ExchangeStateError::InstrumentNotFound(i) => {
-                                error!(exchange = ?exchange, instrument = ?i, "Instrument not found while updating");
+                                error!(exchange = ?exchange, component = ?Component::Engine, instrument = ?i, "Instrument not found while updating");
                             },
                             ExchangeStateError::LocalBookError(e) => {
-                                error!(exchange = ?exchange, error = ?e, "Local book update failed, triggering reinitialization");
+                                error!(exchange = ?exchange, component = ?Component::Engine, error = ?e, "Local book update failed, triggering reinitialization");
                                 if let Err(_e) = exchange_state.send_control_event(ControlEvent::Resync){
-                                    error!(exchange = ?exchange, error = ?_e, "resync error");
+                                    error!(exchange = ?exchange, component = ?Component::Engine, error = ?_e, "resync error");
                                 }
                             }
                         }
@@ -85,11 +85,11 @@ impl Engine {
                             match exchange_state.top_n_ask(&data) {
                                 Ok(vec) => {
                                     if let Err(e) = data.reply_to.send(vec) {
-                                        error!(exchange = ?exchange, error = ?e, "top_n_ask error")
+                                        error!(exchange = ?exchange, component = ?Component::Engine, error = ?e, "top_n_ask error")
                                     }
                                 },
                                 Err(e) => {
-                                    error!(exchange = ?exchange, error = ?e, "top_n_ask error");
+                                    error!(exchange = ?exchange, component = ?Component::Engine, error = ?e, "top_n_ask error");
                                 }
                             }
                         },
@@ -97,11 +97,11 @@ impl Engine {
                             match exchange_state.top_n_bid(&data) {
                                 Ok(vec) => {
                                     if let Err(e) = data.reply_to.send(vec) {
-                                        error!(exchange = ?exchange, error = ?e, "top_n_bid error")
+                                        error!(exchange = ?exchange, component = ?Component::Engine, error = ?e, "top_n_bid error")
                                     }
                                 },
                                 Err(e) => {
-                                    error!(exchange = ?exchange, error = ?e, "top_n_bid error");
+                                    error!(exchange = ?exchange, component = ?Component::Engine, error = ?e, "top_n_bid error");
                                 }
                             }
                         }

@@ -1,6 +1,6 @@
 use std::{collections::{hash_map::Entry, HashMap}, time::{SystemTime, UNIX_EPOCH}};
 
-use md_core::{book::{BookSnapshot, BookUpdate}, events::{EventEnvelope, NormalizedEvent, NormalizedSnapshot, NormalizedUpdate}, types::{Exchange, Instrument}};
+use md_core::{book::{BookSnapshot, BookUpdate}, events::{EventEnvelope, NormalizedEvent, NormalizedSnapshot, NormalizedUpdate}, logging::types::Component, types::{Exchange, Instrument}};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tracing::{error, info, warn};
 
@@ -21,20 +21,20 @@ impl BinanceParser {
         }
     }
 
-    async fn drain_buffered_updates(&mut self, i: Instrument) {
+    fn drain_buffered_updates(&mut self, i: Instrument) {
         let Some(buffer_updates) = self.symbols_pending_snapshot.remove(&i) else {
-            error!(exchange = "binance", component = "parser", symbol = ?i, "symbol live not found");
+            error!(exchange = ?Exchange::Binance, component = ?Component::Parser, symbol = ?i, "symbol live not found");
             return;
         };
         for u in buffer_updates {
-            if let Err(e) = self.normalized_tx.send(u).await {
-                error!(exchange = "binance", component = "parser", error = ?e, "error while sending the update event");
+            if let Err(e) = self.normalized_tx.blocking_send(u) {
+                error!(exchange = ?Exchange::Binance, component = ?Component::Parser, error = ?e, "error while sending the update event");
             }
         }
     }
 
-    pub async fn start(&mut self) {
-        while let Some(msg) = self.raw_rx.recv().await {
+    pub fn start(&mut self) {
+        while let Some(msg) = self.raw_rx.blocking_recv() {
             match msg {
                 BinanceMdMsg::Instruments(list) => {
                     for i in list {
@@ -43,7 +43,7 @@ impl BinanceParser {
                 },
                 BinanceMdMsg::Snapshot(payload) => {
                     let Ok(parsed_snapshot) = serde_json::from_slice::<DepthSnapshot>(&payload.payload) else {
-                        error!(exchange = "binance", component = "parser", symbol = ?payload.symbol, text = ?String::from_utf8(payload.payload.clone()).unwrap(), "error while parsing snapshot");
+                        error!(exchange = ?Exchange::Binance, component = ?Component::Parser, symbol = ?payload.symbol, text = ?String::from_utf8(payload.payload.clone()).unwrap(), "error while parsing snapshot");
                         continue;
                     };
                     let book_snapshot = BookSnapshot {
@@ -60,23 +60,23 @@ impl BinanceParser {
                         event: snapshot_event
                     };
 
-                    if let Err(e) = self.normalized_tx.send(event_envelope).await {
-                        error!(exchange = "binance", component = "parser", error = ?e, "error while sending snapshot event");
+                    if let Err(e) = self.normalized_tx.blocking_send(event_envelope) {
+                        error!(exchange = ?Exchange::Binance, component = ?Component::Parser, error = ?e, "error while sending snapshot event");
                     }
 
-                    self.drain_buffered_updates(payload.symbol).await;
+                    self.drain_buffered_updates(payload.symbol);
                 },
                 BinanceMdMsg::Update(payload) => {
                     let Ok(parsed_update) = serde_json::from_slice::<DepthUpdate>(&payload) else {
                         let text = String::from_utf8(payload.clone()).unwrap();
                         if !text.contains(r#""result": null,"#) { //subscription confirmation message
-                            error!(exchange = "binance", component = "parser", text = ?text, "error while parsing update");
+                            error!(exchange = ?Exchange::Binance, component = ?Component::Parser, text = ?text, "error while parsing update");
                         }
                         continue;
                     };
 
                     if parsed_update.event_type != "depthUpdate" {
-                        error!(exchange = "binance", component = "parser", symbol = ?parsed_update.symbol, "unknown type of event: {}", parsed_update.event_type);
+                        error!(exchange = ?Exchange::Binance, component = ?Component::Parser, symbol = ?parsed_update.symbol, "unknown type of event: {}", parsed_update.event_type);
                         continue;
                     }
 
@@ -88,7 +88,7 @@ impl BinanceParser {
                     let latency = now.saturating_sub(parsed_update.event_time);
 
                     if latency > 1000 {
-                        warn!(exchange = "binance", component = "parser", symbol = ?parsed_update.symbol, "high latency for update: {} ms", latency);
+                        warn!(exchange = ?Exchange::Binance, component = ?Component::Parser, symbol = ?parsed_update.symbol, "high latency for update: {} ms", latency);
                     }
 
                     let book_update = BookUpdate {
@@ -109,12 +109,12 @@ impl BinanceParser {
                     
                     match self.symbols_pending_snapshot.entry(parsed_update.symbol.clone()) {
                         Entry::Occupied(mut e) => {
-                            info!(exchange = "binance", component = "parser", symbol = ?parsed_update.symbol, "buffering symbol not live");
+                            info!(exchange = ?Exchange::Binance, component = ?Component::Parser, symbol = ?parsed_update.symbol, "buffering symbol not live");
                             e.get_mut().push(event_envelope);
                         }
                         Entry::Vacant(_) => {
-                            if let Err(e) = self.normalized_tx.send(event_envelope).await {
-                                error!(exchange = "binance", component = "parser", error = ?e, "error while sending update event");
+                            if let Err(e) = self.normalized_tx.blocking_send(event_envelope) {
+                                error!(exchange = ?Exchange::Binance, component = ?Component::Parser, error = ?e, "error while sending update event");
                             }
                         }
                     }

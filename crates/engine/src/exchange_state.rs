@@ -1,4 +1,4 @@
-use md_core::{book::{BookLevel, LocalBook, LocalBookError}, events::{ControlEvent, NormalizedSnapshot, NormalizedTop, NormalizedUpdate}, types::{Exchange, ExchangeStatus, Instrument}};
+use md_core::{book::{BookLevel, LocalBook, LocalBookError}, events::{ControlEvent, NormalizedSnapshot, NormalizedTop, NormalizedUpdate}, logging::types::Component, types::{Exchange, ExchangeStatus, Instrument}};
 use tokio::sync::mpsc::{error::SendError, Sender};
 use tracing::{debug, info};
 use std::collections::HashMap;
@@ -22,12 +22,12 @@ impl ExchangeState {
     }
 
     pub fn apply_snapshot(&mut self, snapshot: NormalizedSnapshot) {
-        debug!(exchange = ?self.exchange, instrument = ?snapshot.instrument, "applying snapshot");
+        debug!(exchange = ?self.exchange, component = ?Component::ExchangeState, instrument = ?snapshot.instrument, "applying snapshot");
         self.markets.entry(snapshot.instrument).or_insert(LocalBook::new()).apply_snapshot(snapshot.data);
     }
 
     pub fn apply_update(&mut self, update: NormalizedUpdate) -> Result<(), ExchangeStateError> {
-        debug!(exchange = ?self.exchange, instrument = ?update.instrument, "applying update");
+        debug!(exchange = ?self.exchange, component = ?Component::ExchangeState, instrument = ?update.instrument, "applying update");
 
         self.markets.get_mut(&update.instrument)
             .ok_or_else(|| ExchangeStateError::InstrumentNotFound(update.instrument))?
@@ -36,7 +36,7 @@ impl ExchangeState {
     }
 
     pub fn apply_status(&mut self, status: ExchangeStatus) {
-        info!(exchange = ?self.exchange, status = ?status, "applying status");
+        info!(exchange = ?self.exchange, component = ?Component::ExchangeState, status = ?status, "applying status");
         self.status = status;
     }
 
@@ -50,13 +50,13 @@ impl ExchangeState {
 
     pub fn top_n_ask(&self, top: &NormalizedTop) -> Result<Vec<BookLevel>, ExchangeStateError> {
         let local_book = self.markets.get(&top.instrument).ok_or_else(|| ExchangeStateError::InstrumentNotFound(top.instrument.clone()))?;
-        debug!(exchange = ?self.exchange, instrument = ?top.instrument, n = top.n, ask_len = local_book.ask_len(),  "top_n_ask");
+        debug!(exchange = ?self.exchange, component = ?Component::ExchangeState, instrument = ?top.instrument, n = top.n, ask_len = local_book.ask_len(),  "top_n_ask");
         Ok(local_book.top_n_ask(top.n))
     }
 
     pub fn top_n_bid(&self, top: &NormalizedTop) -> Result<Vec<BookLevel>, ExchangeStateError> {
         let local_book = self.markets.get(&top.instrument).ok_or_else(|| ExchangeStateError::InstrumentNotFound(top.instrument.clone()))?;
-        debug!(exchange = ?self.exchange, instrument = ?top.instrument, n = top.n, bid_len = local_book.bid_len(),  "top_n_bid");
+        debug!(exchange = ?self.exchange, component = ?Component::ExchangeState, instrument = ?top.instrument, n = top.n, bid_len = local_book.bid_len(),  "top_n_bid");
         Ok(local_book.top_n_bid(top.n))
     }
 }

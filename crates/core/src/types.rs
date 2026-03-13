@@ -57,6 +57,7 @@ impl From<String> for Instrument {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Exchange {
     Binance,
+    Bitget,
     Bybit,
     Coinbase,
     Kraken,
@@ -67,6 +68,7 @@ impl fmt::Display for Exchange {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Exchange::Binance => write!(f, "Binance"),
+            Exchange::Bitget => write!(f, "Bitget"),
             Exchange::Bybit => write!(f, "Bybit"),
             Exchange::Coinbase => write!(f, "Coinbase"),
             Exchange::Kraken => write!(f, "Kraken"),
