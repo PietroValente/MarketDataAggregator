@@ -8,3 +8,4 @@ md_core = { path = "../core" }
 thiserror = "2.0.18"
 tracing = "0.1.44"
 tokio = { version = "1", features = ["sync"] }
+rust_decimal = "1.40"
