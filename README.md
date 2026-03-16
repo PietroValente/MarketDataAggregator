@@ -1,4 +1,4 @@
-# MarketDataAggregator
+# Market Data Aggregator
 
 **A realistic, production‑style market data engine for multi‑exchange order book aggregation, built in Rust with a strong focus on performance, reliability, and observability.**
 
