@@ -3,16 +3,15 @@ use std::fs;
 
 #[derive(Debug, Deserialize)]
 pub struct AppConfig {
-    pub binance: BinanceConfig,
+    pub scylladb: ScyllaDb,
     pub channels: ChannelConfig,
+    pub binance: BinanceConfig
 }
 
 #[derive(Debug, Deserialize)]
-pub struct BinanceConfig {
-    pub exchange_info: String,
-    pub snapshot: String,
-    pub ws: String,
-    pub max_subscription_per_ws: usize,
+pub struct ScyllaDb {
+    pub uri: String,
+    pub init_path: String
 }
 
 #[derive(Debug, Deserialize)]
@@ -21,6 +20,14 @@ pub struct ChannelConfig {
     pub normalized_buffer: usize,
     pub control_buffer: usize,
     pub log_buffer: usize,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BinanceConfig {
+    pub exchange_info: String,
+    pub snapshot: String,
+    pub ws: String,
+    pub max_subscription_per_ws: usize,
 }
 
 pub fn load_config(path: &str) -> Result<AppConfig, Box<dyn std::error::Error>> {

@@ -4,7 +4,7 @@ use engine::Engine;
 use query::query_manager::QueryManager;
 use tokio::sync::mpsc::channel;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-use md_core::{connector_trait::ExchangeConnector, events::{ControlEvent, EventEnvelope}, logging::layer::DbLoggingLayer, types::Exchange};
+use md_core::{connector_trait::ExchangeConnector, events::{ControlEvent, EventEnvelope}, logging::{layer::DbLoggingLayer, writer::DbLoggingWriter}, types::Exchange};
 
 mod config;
 use config::load_config;
@@ -13,22 +13,28 @@ use url::Url;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Initializing...");
-    let config = load_config("config.toml").expect("Load config error");
+    let config = load_config("config/config.toml").expect("Load config error");
 
     /* LOGS */
-    let (log_tx, _log_rx) = tokio::sync::mpsc::channel(config.channels.log_buffer);
-    let layer = DbLoggingLayer::new(log_tx);
+    let (log_tx, log_rx) = tokio::sync::mpsc::channel(config.channels.log_buffer);
+    let log_layer = DbLoggingLayer::new(log_tx);
     
     tracing_subscriber::registry()
-        .with(layer)
+        .with(log_layer)
         .init();
 
-    // tokio::spawn(async move {
-    //     //log_writer(rx).await;
-    //     while let Some(msg) = log_rx.recv().await {
-    //         println!("{:?}", msg);
-    //     }
-    // });
+    tokio::spawn(async move {
+        let mut log_writer =  match DbLoggingWriter::new(&config.scylladb.uri, &config.scylladb.init_path, log_rx).await {
+            Ok(writer) => {writer},
+            Err(e) => {
+                eprintln!("Error while creating log writer: {:?}", e);
+                return;
+            }
+        };
+        if let Err(e) = log_writer.start().await {
+            eprintln!("Error while running the log writer: {:?}", e);
+        };
+    });
 
     /* CONTROL CHANNELS */
     let mut control_senders = HashMap::new();
