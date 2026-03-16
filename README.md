@@ -163,7 +163,7 @@ top <exchange> <instrument> <n>
 For example:
 
 - `top BINANCE BTCUSDT 10`
-- `top COINBASE BTC-USD 5`
+- `top COINBASE ETHUSD 5`
 
 When you run this command:
 
