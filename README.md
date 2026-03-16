@@ -61,12 +61,6 @@ The repository is organized as a Rust workspace, with a clear separation of resp
   - Detects inconsistencies and drives resynchronization via control events.
 - **`query`** – a small interactive CLI. It sends normalized queries to the engine and renders the response in the terminal (e.g. continuous top‑of‑book view).
 
-Conceptually, the flow looks like this:
-
-image
-
-Each arrow is a **message‑passing boundary**. Data moves through the system as explicit messages, never as shared mutable state.
-
 ---
 
 ### Concurrency model: message passing over locking
