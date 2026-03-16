@@ -61,6 +61,8 @@ The repository is organized as a Rust workspace, with a clear separation of resp
   - Detects inconsistencies and drives resynchronization via control events.
 - **`query`** – a small interactive CLI. It sends normalized queries to the engine and renders the response in the terminal (e.g. continuous top‑of‑book view).
 
+![MarketDataAggregator Architecture](https://github.com/PietroValente/MarketDataAggregator/blob/main/images/Architecture.png)
+
 ---
 
 ### Concurrency model: message passing over locking
