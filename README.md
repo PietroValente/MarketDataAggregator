@@ -63,57 +63,7 @@ The repository is organized as a Rust workspace, with a clear separation of resp
 
 Conceptually, the flow looks like this:
 
-```mermaid
-flowchart LR
-    subgraph Exchanges
-        B[Binance Connector]
-        C[Coinbase Connector]
-        K[Kraken Connector]
-        O[OKX Connector]
-        Y[Bybit Connector]
-        G[Bitget Connector]
-    end
-
-    subgraph Parsers
-        PB[Binance Parser]
-        PC[Coinbase Parser]
-        PK[Kraken Parser]
-        PO[OKX Parser]
-        PY[Bybit Parser]
-        PG[Bitget Parser]
-    end
-
-    subgraph CoreEngine[Engine]
-        E[(In-memory\nOrder Books)]
-    end
-
-    subgraph Query
-        Q[Query Manager CLI]
-    end
-
-    subgraph Logging
-        T[tracing\nDbLoggingLayer]
-        W[DbLoggingWriter\n(ScyllaDB)]
-    end
-
-    B -->|raw md msgs| PB
-    C --> PC
-    K --> PK
-    O --> PO
-    Y --> PY
-    G --> PG
-
-    PB -->|normalized events| E
-    PC --> E
-    PK --> E
-    PO --> E
-    PY --> E
-    PG --> E
-
-    Q <--> |queries & replies| E
-
-    T -->|LogEvent| W
-```
+image
 
 Each arrow is a **message‑passing boundary**. Data moves through the system as explicit messages, never as shared mutable state.
 
