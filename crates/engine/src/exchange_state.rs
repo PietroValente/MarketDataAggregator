@@ -105,7 +105,7 @@ mod tests {
 
     fn update(
         sym: &str,
-        first_update_id: u64,
+        first_update_id: Option<u64>,
         last_update_id: u64,
         bids: Vec<(Price, Qty)>,
         asks: Vec<(Price, Qty)>,
@@ -185,7 +185,7 @@ mod tests {
         let err = state
             .apply_update(update(
                 "BTCUSDT",
-                1,
+                Some(1),
                 2,
                 vec![(px(100), qty(1))],
                 vec![],
@@ -212,7 +212,7 @@ mod tests {
 
         state.apply_update(update(
             "BTCUSDT",
-            101,
+            Some(101),
             102,
             vec![(px(100), qty(7)), (px(98), qty(1))],
             vec![(px(101), qty(5))],
@@ -277,7 +277,7 @@ mod tests {
         let err = state
             .apply_update(update(
                 "BTCUSDT",
-                12, // gap: expected <= 11
+                Some(12), // gap: expected <= 11
                 13,
                 vec![(px(100), qty(2))],
                 vec![(px(102), qty(2))],

@@ -1,6 +1,6 @@
 use std::{collections::HashMap, thread};
 use binance::{connector::BinanceConnector, parser::BinanceParser, types::{BinanceMdMsg, BinanceUrls}};
-use bitget::{connector::BitgetConnector, types::{BitgetMdMsg, BitgetUrls}};
+use bitget::{connector::BitgetConnector, parser::BitgetParser, types::{BitgetMdMsg, BitgetUrls}};
 use engine::Engine;
 use query::query_manager::QueryManager;
 use tokio::sync::mpsc::channel;
@@ -62,19 +62,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     /* PARSERS */
     let (binance_raw_tx, binance_raw_rx) = channel::<BinanceMdMsg>(config.channels.raw_buffer);
-    let (bitget_raw_tx, mut bitget_raw_rx) = channel::<BitgetMdMsg>(config.channels.raw_buffer);
+    let (bitget_raw_tx, bitget_raw_rx) = channel::<BitgetMdMsg>(config.channels.raw_buffer);
     // let (bybit_raw_tx, bybit_raw_rx) = channel::<BybitMdMsg>(config.channels.raw_buffer);
     // let (coinbase_raw_tx, coinbase_raw_rx) = channel::<CoinbaseMdMsg>(config.channels.raw_buffer);
     // let (kraken_raw_tx, kraken_raw_rx) = channel::<KrakenMdMsg>(config.channels.raw_buffer);
     // let (okx_raw_tx, okx_raw_rx) = channel::<OkxMdMsg>(config.channels.raw_buffer);
-    thread::spawn(move || {
-        while let Some(raw_msg) = bitget_raw_rx.blocking_recv() {
-            println!("{:?}", String::from_utf8(raw_msg.0.to_vec()).unwrap());
-        }
-    });
 
     let mut binance_parser = BinanceParser::new(binance_raw_rx, normalized_tx.clone());
-    // let mut bitget_parser = BitgetParser::new(bitget_raw_rx, normalized_tx);
+    let mut bitget_parser = BitgetParser::new(bitget_raw_rx, normalized_tx.clone());
     // let mut bybit_parser = BybitParser::new(bybit_raw_rx, normalized_tx);
     // let mut coinbase_parser = CoinbaseParser::new(coinbase_raw_rx, normalized_tx);
     // let mut kraken_parser = KrakenParser::new(kraken_raw_rx, normalized_tx);
@@ -83,9 +78,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     thread::spawn(move || {
         binance_parser.run();
     });
-    // thread::spawn(move || {
-    //     bitget_parser.start();
-    // });
+    thread::spawn(move || {
+        bitget_parser.run();
+    });
     // thread::spawn(move || {
     //     bybit_parser.start();
     // });

@@ -40,7 +40,7 @@ pub struct BookSnapshot {
 
 #[derive(Debug)]
 pub struct BookUpdate {
-    pub first_update_id: u64,
+    pub first_update_id: Option<u64>,
     pub last_update_id: u64,
     pub bids: Vec<(Price, Qty)>,
     pub asks: Vec<(Price, Qty)>,
@@ -76,8 +76,10 @@ impl LocalBook {
         if update.last_update_id <= self.update_id {
             return Ok(());
         }
-        if update.first_update_id > self.update_id + 1 {
-            return Err(LocalBookError::OutOfSync);
+        if let Some(first_update_id) = update.first_update_id {
+            if first_update_id > self.update_id + 1 {
+                return Err(LocalBookError::OutOfSync);
+            }
         }
         self.update_id = update.last_update_id;
         for (price, qty) in update.asks {
@@ -253,7 +255,7 @@ mod tests {
         });
 
         let res = book.apply_update(BookUpdate {
-            first_update_id: 101,
+            first_update_id: Some(101),
             last_update_id: 102,
             asks: vec![(px(102), qty(2))],
             bids: vec![(px(100), qty(3))],
@@ -285,7 +287,7 @@ mod tests {
         });
 
         let res = book.apply_update(BookUpdate {
-            first_update_id: 45,
+            first_update_id: Some(45),
             last_update_id: 50,
             asks: vec![(px(200), qty(99))],
             bids: vec![(px(1), qty(99))],
@@ -315,7 +317,7 @@ mod tests {
         });
 
         let res = book.apply_update(BookUpdate {
-            first_update_id: 12,
+            first_update_id: Some(12),
             last_update_id: 13,
             asks: vec![(px(102), qty(2))],
             bids: vec![(px(100), qty(2))],

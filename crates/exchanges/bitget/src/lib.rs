@@ -1,3 +1,3 @@
-// pub mod parser;
+pub mod parser;
 pub mod connector;
 pub mod types;

@@ -95,7 +95,7 @@ impl BinanceParser {
                             }
         
                             let book_update = BookUpdate {
-                                first_update_id: update.first_update_id,
+                                first_update_id: Some(update.first_update_id),
                                 last_update_id: update.final_update_id,
                                 bids: update.bids,
                                 asks: update.asks
