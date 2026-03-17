@@ -4,7 +4,7 @@ use md_core::{book::{BookSnapshot, BookUpdate}, events::{EventEnvelope, Normaliz
 use tokio::sync::mpsc::{Receiver, Sender};
 use tracing::{error, info, warn};
 
-use crate::types::{BinanceMdMsg, DepthSnapshot, DepthUpdate, SubscriptionConfirmation};
+use crate::types::{BinanceMdMsg, DepthSnapshot, WsMessage};
 
 pub struct BinanceParser {
     raw_rx: Receiver<BinanceMdMsg>,
@@ -66,57 +66,62 @@ impl BinanceParser {
 
                     self.drain_buffered_updates(payload.symbol);
                 },
-                BinanceMdMsg::Update(payload) => {
-                    let Ok(parsed_update) = serde_json::from_slice::<DepthUpdate>(&payload) else {
-                        if let Err(_) = serde_json::from_slice::<SubscriptionConfirmation>(&payload) {
+                BinanceMdMsg::WsMessage(payload) => {
+                    match serde_json::from_slice::<WsMessage>(&payload) {
+                        Ok(WsMessage::Confirmation(confirmation)) => {
+                            if let Some(result) = confirmation.result {
+                                error!(exchange = ?Exchange::Binance, component = ?Component::Parser, result = ?result,"subscription result different from null");
+                            }
+                        },
+                        Err(_) => {
                             let text = String::from_utf8_lossy(&payload);
                             error!(exchange = ?Exchange::Binance, component = ?Component::Parser, text = ?text, "error while parsing update");
-                        }
-                        continue;
-                    };
-
-                    if parsed_update.event_type != "depthUpdate" {
-                        error!(exchange = ?Exchange::Binance, component = ?Component::Parser, symbol = ?parsed_update.symbol, "unknown type of event: {}", parsed_update.event_type);
-                        continue;
-                    }
-
-                    let now = SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .unwrap()
-                        .as_millis() as u64;
-
-                    let latency = now.saturating_sub(parsed_update.event_time);
-
-                    if latency > 1000 {
-                        warn!(exchange = ?Exchange::Binance, component = ?Component::Parser, symbol = ?parsed_update.symbol, "high latency for update: {} ms", latency);
-                    }
-
-                    let book_update = BookUpdate {
-                        first_update_id: parsed_update.first_update_id,
-                        last_update_id: parsed_update.final_update_id,
-                        bids: parsed_update.bids,
-                        asks: parsed_update.asks
-                    };
-
-                    let update_event = NormalizedEvent::Update( NormalizedUpdate {
-                        instrument: parsed_update.symbol.clone(),
-                        data: book_update
-                    });
-                    let event_envelope = EventEnvelope {
-                        exchange: Exchange::Binance,
-                        event: update_event
-                    };
-                    
-                    match self.symbols_pending_snapshot.entry(parsed_update.symbol.clone()) {
-                        Entry::Occupied(mut e) => {
-                            info!(exchange = ?Exchange::Binance, component = ?Component::Parser, symbol = ?parsed_update.symbol, "buffering symbol not live");
-                            e.get_mut().push(event_envelope);
-                        }
-                        Entry::Vacant(_) => {
-                            if let Err(e) = self.normalized_tx.blocking_send(event_envelope) {
-                                error!(exchange = ?Exchange::Binance, component = ?Component::Parser, error = ?e, "error while sending update event");
+                        },
+                        Ok(WsMessage::Update(update)) => {
+                            if update.event_type != "depthUpdate" {
+                                error!(exchange = ?Exchange::Binance, component = ?Component::Parser, symbol = ?update.symbol, "unknown type of event: {}", update.event_type);
+                                continue;
                             }
-                        }
+        
+                            let now = SystemTime::now()
+                                .duration_since(UNIX_EPOCH)
+                                .unwrap()
+                                .as_millis() as u64;
+        
+                            let latency = now.saturating_sub(update.event_time);
+        
+                            if latency > 1000 {
+                                warn!(exchange = ?Exchange::Binance, component = ?Component::Parser, symbol = ?update.symbol, "high latency for update: {} ms", latency);
+                            }
+        
+                            let book_update = BookUpdate {
+                                first_update_id: update.first_update_id,
+                                last_update_id: update.final_update_id,
+                                bids: update.bids,
+                                asks: update.asks
+                            };
+        
+                            let update_event = NormalizedEvent::Update( NormalizedUpdate {
+                                instrument: update.symbol.clone(),
+                                data: book_update
+                            });
+                            let event_envelope = EventEnvelope {
+                                exchange: Exchange::Binance,
+                                event: update_event
+                            };
+                            
+                            match self.symbols_pending_snapshot.entry(update.symbol.clone()) {
+                                Entry::Occupied(mut e) => {
+                                    info!(exchange = ?Exchange::Binance, component = ?Component::Parser, symbol = ?update.symbol, "buffering symbol not live");
+                                    e.get_mut().push(event_envelope);
+                                }
+                                Entry::Vacant(_) => {
+                                    if let Err(e) = self.normalized_tx.blocking_send(event_envelope) {
+                                        error!(exchange = ?Exchange::Binance, component = ?Component::Parser, error = ?e, "error while sending update event");
+                                    }
+                                }
+                            }
+                        },
                     }
                 }
             }

@@ -139,7 +139,7 @@ impl ExchangeConnector for BinanceConnector {
         while let Some(msg) = self.inbound_rx.recv().await {
             match msg {
                 InboundEvent::WsMessage(payload) => {
-                    if let Err(e) = self.raw_tx.send(BinanceMdMsg::Update(payload)).await {
+                    if let Err(e) = self.raw_tx.send(BinanceMdMsg::WsMessage(payload)).await {
                         error!(exchange = ?Exchange::Binance, component = ?Component::Connector, error = ?e, "error while sending the update message");
                         continue;
                     }

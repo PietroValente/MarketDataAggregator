@@ -37,7 +37,7 @@ pub struct BinanceSnapshotMsg {
 pub enum BinanceMdMsg {
     Instruments(Vec<Instrument>),
     Snapshot(BinanceSnapshotMsg),
-    Update(RawMdMsg),
+    WsMessage(RawMdMsg),
 }
 
 #[derive(Clone)]
@@ -50,6 +50,13 @@ pub struct BinanceSubscriptionMsg {
 pub struct DepthQuery<'a> {
     pub symbol: &'a str,
     pub limit: u32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum WsMessage {
+    Confirmation(SubscriptionConfirmation),
+    Update(DepthUpdate)
 }
 
 #[derive(Debug, Deserialize)]
