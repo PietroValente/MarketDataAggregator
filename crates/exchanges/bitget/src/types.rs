@@ -5,9 +5,16 @@ use tokio_tungstenite::tungstenite::Message;
 use url::Url;
 use std::str::FromStr;
 
+pub struct BitgetUrls {
+    pub exchange_info: Url,
+    pub ws: Url,
+}
+
+pub struct BitgetMdMsg(pub RawMdMsg);
+
 #[derive(Deserialize)]
 pub struct ApiResponse {
-    pub symbols: Vec<SymbolInfo>,
+    pub data: Vec<SymbolInfo>,
 }
 
 #[derive(Deserialize)]
@@ -18,27 +25,29 @@ pub struct SymbolInfo {
 
 #[derive(Debug, Serialize)]
 pub struct SubscriptionRequest {
-    pub method: String,
-    pub params: Vec<String>,
-    pub id: i64
+    pub op: String,
+    pub args: Vec<SymbolParam>
 }
 
-pub struct BinanceUrls {
-    pub exchange_info: Url,
-    pub snapshot: Url,
-    pub ws: Url,
+#[derive(Debug, Serialize)]
+pub struct SymbolParam {
+    #[serde(rename = "instType")]
+    pub inst_type: String,
+    pub channel: String,
+    #[serde(rename = "instId")]
+    pub inst_id: String
 }
+
+
+
+
 
 pub struct BinanceSnapshotMsg {
     pub symbol: Instrument,
     pub payload: RawMdMsg
 }
 
-pub enum BinanceMdMsg {
-    Instruments(Vec<Instrument>),
-    Snapshot(BinanceSnapshotMsg),
-    Update(RawMdMsg),
-}
+
 
 #[derive(Clone)]
 pub struct BinanceSubscriptionMsg {
@@ -53,14 +62,8 @@ pub struct DepthQuery<'a> {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct SubscriptionConfirmation {
-    pub result: Option<serde_json::Value>,
-    pub id: u64,
-}
-
-#[derive(Debug, Deserialize)]
 pub struct DepthUpdate {
-    #[serde(rename = "e")]
+    #[serde(rename = "action")]
     pub event_type: String,
 
     #[serde(rename = "E")]

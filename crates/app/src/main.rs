@@ -1,5 +1,6 @@
 use std::{collections::HashMap, thread};
 use binance::{connector::BinanceConnector, parser::BinanceParser, types::{BinanceMdMsg, BinanceUrls}};
+use bitget::{connector::BitgetConnector, types::{BitgetMdMsg, BitgetUrls}};
 use engine::Engine;
 use query::query_manager::QueryManager;
 use tokio::sync::mpsc::channel;
@@ -12,7 +13,6 @@ use url::Url;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("Initializing...");
     let config = load_config("config/config.toml").expect("Load config error");
 
     /* LOGS */
@@ -40,14 +40,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut control_senders = HashMap::new();
 
     let (binance_control_tx, binance_control_rx) = channel::<ControlEvent>(config.channels.control_buffer);
-    // let (bitget_control_tx, bitget_control_rx) = channel::<ControlEvent>(config.channels.control_buffer);
+    let (bitget_control_tx, bitget_control_rx) = channel::<ControlEvent>(config.channels.control_buffer);
     // let (bybit_control_tx, bybit_control_rx) = channel::<ControlEvent>(config.channels.control_buffer);
     // let (coinbase_control_tx, coinbase_control_rx) = channel::<ControlEvent>(config.channels.control_buffer);
     // let (kraken_control_tx, kraken_control_rx) = channel::<ControlEvent>(config.channels.control_buffer);
     // let (okx_control_tx, okx_control_rx) = channel::<ControlEvent>(config.channels.control_buffer);
 
     control_senders.insert(Exchange::Binance, binance_control_tx);
-    // control_senders.insert(Exchange::Bitget, bitget_control_tx);
+    control_senders.insert(Exchange::Bitget, bitget_control_tx);
     // control_senders.insert(Exchange::Bybit, bybit_control_tx);
     // control_senders.insert(Exchange::Coinbase, coinbase_control_tx);
     // control_senders.insert(Exchange::Kraken, kraken_control_tx);
@@ -62,11 +62,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     /* PARSERS */
     let (binance_raw_tx, binance_raw_rx) = channel::<BinanceMdMsg>(config.channels.raw_buffer);
-    // let (bitget_raw_tx, bitget_raw_rx) = channel::<BinanceMdMsg>(config.channels.raw_buffer);
-    // let (bybit_raw_tx, bybit_raw_rx) = channel::<BinanceMdMsg>(config.channels.raw_buffer);
-    // let (coinbase_raw_tx, coinbase_raw_rx) = channel::<BinanceMdMsg>(config.channels.raw_buffer);
-    // let (kraken_raw_tx, kraken_raw_rx) = channel::<BinanceMdMsg>(config.channels.raw_buffer);
-    // let (okx_raw_tx, okx_raw_rx) = channel::<BinanceMdMsg>(config.channels.raw_buffer);
+    let (bitget_raw_tx, mut bitget_raw_rx) = channel::<BitgetMdMsg>(config.channels.raw_buffer);
+    // let (bybit_raw_tx, bybit_raw_rx) = channel::<BybitMdMsg>(config.channels.raw_buffer);
+    // let (coinbase_raw_tx, coinbase_raw_rx) = channel::<CoinbaseMdMsg>(config.channels.raw_buffer);
+    // let (kraken_raw_tx, kraken_raw_rx) = channel::<KrakenMdMsg>(config.channels.raw_buffer);
+    // let (okx_raw_tx, okx_raw_rx) = channel::<OkxMdMsg>(config.channels.raw_buffer);
+    thread::spawn(move || {
+        while let Some(raw_msg) = bitget_raw_rx.blocking_recv() {
+            println!("{:?}", String::from_utf8(raw_msg.0.to_vec()).unwrap());
+        }
+    });
 
     let mut binance_parser = BinanceParser::new(binance_raw_rx, normalized_tx.clone());
     // let mut bitget_parser = BitgetParser::new(bitget_raw_rx, normalized_tx);
@@ -100,11 +105,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         snapshot: Url::parse(&config.binance.snapshot)?, 
         ws: Url::parse(&config.binance.ws)? 
     };
-    // let bitget_urls = BitgetUrls { 
-    //     exchange_info: todo!(), 
-    //     snapshot: todo!(), 
-    //     ws: todo!() 
-    // };
+    let bitget_urls = BitgetUrls { 
+        exchange_info: Url::parse(&config.bitget.exchange_info)?,
+        ws: Url::parse(&config.bitget.ws)? 
+    };
     // let bybit_urls = BybitUrls { 
     //     exchange_info: todo!(), 
     //     snapshot: todo!(), 
@@ -126,19 +130,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     //     ws: todo!() 
     // };
 
-    let mut binance_connector = BinanceConnector::new(binance_urls, config.binance.max_subscription_per_ws, binance_raw_tx, binance_control_rx).await.unwrap();
-    //let mut bitget_connector  = BitgetConnector::new(bitget_urls, config.bitget.max_subscription_per_ws, bitget_raw_tx, bitget_control_rx).await.unwrap();
     //let mut bybit_connector = BybitConnector::new(bybit_urls, config.bybit.max_subscription_per_ws, bybit_raw_tx, bybit_control_rx).await.unwrap();
     //let mut coinbase_connector = CoinbaseConnector::new(coinbase_urls, config.coinbase.max_subscription_per_ws, coinbase_raw_tx, coinbase_control_rx).await.unwrap();
     //let mut kraken_connector = KrakenConnector::new(kraken_urls, config.kraken.max_subscription_per_ws, kraken_raw_tx, kraken_control_rx).await.unwrap();
     //let mut okx_connector = OkxConnector::new(okx_urls, config.okx.max_subscription_per_ws, okx_raw_tx, okx_control_rx).await.unwrap();
     
     tokio::spawn(async move {
+        let mut binance_connector = BinanceConnector::new(binance_urls, config.binance.max_subscription_per_ws, binance_raw_tx, binance_control_rx).await.unwrap();
         binance_connector.start().await;
     });
-    // tokio::spawn(async move {
-    //     bitget_connector.start().await;
-    // });
+    tokio::spawn(async move {
+        let mut bitget_connector  = BitgetConnector::new(bitget_urls, config.bitget.max_subscription_per_ws, bitget_raw_tx, bitget_control_rx).await.unwrap();
+        bitget_connector.start().await;
+    });
     // tokio::spawn(async move {
     //     bybit_connector.start().await;
     // });

@@ -4,7 +4,7 @@ use md_core::{book::{BookSnapshot, BookUpdate}, events::{EventEnvelope, Normaliz
 use tokio::sync::mpsc::{Receiver, Sender};
 use tracing::{error, info, warn};
 
-use crate::types::{BinanceMdMsg, DepthSnapshot, DepthUpdate, SubscriptionConfirmation};
+use crate::types::{BinanceMdMsg, DepthSnapshot, DepthUpdate};
 
 pub struct BinanceParser {
     raw_rx: Receiver<BinanceMdMsg>,
@@ -68,8 +68,8 @@ impl BinanceParser {
                 },
                 BinanceMdMsg::Update(payload) => {
                     let Ok(parsed_update) = serde_json::from_slice::<DepthUpdate>(&payload) else {
-                        if let Err(_) = serde_json::from_slice::<SubscriptionConfirmation>(&payload) {
-                            let text = String::from_utf8_lossy(&payload);
+                        let text = String::from_utf8(payload.clone()).unwrap();
+                        if !text.contains(r#""result": null,"#) { //subscription confirmation message
                             error!(exchange = ?Exchange::Binance, component = ?Component::Parser, text = ?text, "error while parsing update");
                         }
                         continue;

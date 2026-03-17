@@ -25,8 +25,6 @@ impl QueryManager {
     }
 
     pub fn run(&self) {
-        println!("Ready");
-
         loop {
             print!("> ");
             io::stdout().flush().unwrap();
@@ -67,6 +65,19 @@ impl QueryManager {
 
                     let instrument = instrument.to_uppercase();
                     self.run_top_mode(exchange, instrument, n);
+                }
+                "status" => {
+                    let Some(exchange_str) = line.next() else {
+                        eprintln!("Error: missing exchange");
+                        continue;
+                    };
+                    let exchange = Exchange::from(exchange_str);
+                    if exchange == Exchange::Unknown {
+                        eprintln!("Error: unrecognized exchange");
+                        continue;
+                    }
+
+                    //TODO: get exchange status
                 }
                 "exit" => {
                     return;

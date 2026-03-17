@@ -5,7 +5,8 @@ use std::fs;
 pub struct AppConfig {
     pub scylladb: ScyllaDb,
     pub channels: ChannelConfig,
-    pub binance: BinanceConfig
+    pub binance: BinanceConfig,
+    pub bitget: BitgetConfig
 }
 
 #[derive(Debug, Deserialize)]
@@ -26,6 +27,13 @@ pub struct ChannelConfig {
 pub struct BinanceConfig {
     pub exchange_info: String,
     pub snapshot: String,
+    pub ws: String,
+    pub max_subscription_per_ws: usize,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BitgetConfig {
+    pub exchange_info: String,
     pub ws: String,
     pub max_subscription_per_ws: usize,
 }
