@@ -56,7 +56,7 @@ pub struct DepthQuery<'a> {
 #[serde(untagged)]
 pub enum WsMessage {
     Confirmation(SubscriptionConfirmation),
-    Update(DepthUpdate)
+    Update(ParsedBookUpdate)
 }
 
 #[derive(Debug, Deserialize)]
@@ -66,7 +66,7 @@ pub struct SubscriptionConfirmation {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct DepthUpdate {
+pub struct ParsedBookUpdate {
     #[serde(rename = "e")]
     pub event_type: String,
 
@@ -90,7 +90,7 @@ pub struct DepthUpdate {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct DepthSnapshot {
+pub struct ParsedBookSnapshot {
     #[serde(rename = "lastUpdateId")]
     pub last_update_id: u64,
 

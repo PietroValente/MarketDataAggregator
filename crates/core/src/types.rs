@@ -85,6 +85,7 @@ impl From<&str> for Exchange {
             "binance" => Exchange::Binance,
             "bitget" => Exchange::Bitget,
             "bybit" => Exchange::Bybit,
+            "kraken" => Exchange::Kraken,
             "coinbase" => Exchange::Coinbase,
             "okx" => Exchange::Okx,
             _ => Exchange::Unknown

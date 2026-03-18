@@ -48,12 +48,12 @@ pub struct SymbolParam {
 #[serde(untagged)]
 pub enum WsMessage {
     Confirmation(SubscriptionMsg),
-    Snapshot(DepthSnapshot),
-    Update(DepthUpdate)
+    Snapshot(ParsedBookSnapshot),
+    Update(ParsedBookUpdate)
 }
 
 #[derive(Debug, Deserialize)]
-pub struct DepthSnapshot {
+pub struct ParsedBookSnapshot {
     #[serde(rename = "type")]
     pub op_type: String,
 
@@ -85,7 +85,7 @@ where
 }
 
 #[derive(Debug, Deserialize)]
-pub struct DepthUpdate {
+pub struct ParsedBookUpdate {
     #[serde(rename = "type")]
     pub op_type: String,
 

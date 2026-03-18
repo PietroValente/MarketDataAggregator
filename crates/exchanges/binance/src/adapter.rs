@@ -5,7 +5,7 @@ use md_core::{book::BookLevels, events::{BookEventType, EventEnvelope, Normalize
 use tokio::sync::mpsc::{Receiver, Sender};
 use tracing::{error, info, warn};
 
-use crate::types::{BinanceMdMsg, DepthSnapshot, DepthUpdate, WsMessage};
+use crate::types::{BinanceMdMsg, ParsedBookSnapshot, ParsedBookUpdate, WsMessage};
 
 pub struct BinanceAdapter {
     raw_rx: Receiver<BinanceMdMsg>,
@@ -43,7 +43,7 @@ impl BinanceAdapter {
                     }
                 },
                 BinanceMdMsg::Snapshot(payload) => {
-                    let Ok(parsed_snapshot) = serde_json::from_slice::<DepthSnapshot>(&payload.payload) else {
+                    let Ok(parsed_snapshot) = serde_json::from_slice::<ParsedBookSnapshot>(&payload.payload) else {
                         error!(exchange = ?Exchange::Binance, component = ?Component::Adapter, symbol = ?payload.symbol, text = ?String::from_utf8(payload.payload.clone()).unwrap(), "error while parsing snapshot");
                         continue;
                     };
@@ -128,8 +128,8 @@ impl BinanceAdapter {
 }
 
 impl ExchangeAdapter for BinanceAdapter {
-    type SnapshotPayload = DepthSnapshot;
-    type UpdatePayload = DepthUpdate;
+    type SnapshotPayload = ParsedBookSnapshot;
+    type UpdatePayload = ParsedBookUpdate;
 
     fn exchange(&self) -> Exchange {
         Exchange::Binance

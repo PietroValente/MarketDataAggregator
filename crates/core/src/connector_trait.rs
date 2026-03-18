@@ -11,26 +11,49 @@ use url::Url;
 use crate::events::{InboundEvent, PingMsg};
 use crate::types::RawMdMsg;
 
+/// Commands that can be issued to a connection writer task.
 pub enum WriteCommand {
     Raw(Message),
     Pong(Vec<u8>)
 }
 
+/// Handles associated with a single websocket connection.
 pub struct ConnectionTasks {
     pub reader_handle: JoinHandle<()>,
     pub writer_handle: JoinHandle<()>,
     pub writer_tx: Sender<WriteCommand>,
 }
 
+/// Common interface for exchange-specific websocket connectors.
+///
+/// A connector is responsible for:
+/// - building subscription payloads for the exchange,
+/// - establishing and maintaining websocket connections,
+/// - routing raw messages and ping/pong events into the unified event channel.
 #[allow(async_fn_in_trait)]
 pub trait ExchangeConnector {
+    /// Type used to represent a single subscription payload for this exchange.
     type SubscriptionPayload;
 
+    /// Fetch the list of symbols/instruments to subscribe to via REST.
     async fn get_subscriptions_list(rest_url: &Url) -> Result<Vec<String>, Box<dyn Error + Send + Sync>>;
+
+    /// Build websocket subscription payloads, splitting the symbol list across multiple connections if needed.
     async fn build_subscriptions(rest_url: &Url, max_subscription_per_ws: usize) -> Result<Vec<Self::SubscriptionPayload>, Box<dyn Error + Send + Sync>>;
+
+    /// (Re)create websocket streams and start listening for market data.
     async fn subscribe_streams(&mut self) -> Result<(), Box<dyn Error + Send + Sync>>;
+
+    /// Send a pong response for an inbound ping coming from a specific websocket.
     async fn pong(&self, msg: PingMsg) -> Result<(), Box<dyn Error + Send + Sync>>;
+
+    /// Run the connector event loop (typically until the inbound channel is closed).
     async fn start(&mut self);
+
+    /// Default websocket reader task shared across exchanges.
+    ///
+    /// It forwards binary/text frames as `RawMdMsg`, pings as `Ping`, and close/errors
+    /// as `ConnectionClosed` into the unified event channel.
     async fn reader_task(
         ws_id: u8,
         ws_url: Arc<Url>,
@@ -86,6 +109,11 @@ pub trait ExchangeConnector {
             }
         }
     }
+
+    /// Default websocket writer task shared across exchanges.
+    ///
+    /// It consumes `WriteCommand`s from an internal channel and forwards them
+    /// to the websocket sink.
     async fn writer_task(
         ws_url: Arc<Url>,
         mut sink: SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>,
