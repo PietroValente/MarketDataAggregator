@@ -4,14 +4,14 @@ use serde::{Deserialize, Deserializer, Serialize};
 use url::Url;
 use std::{ops::Deref, str::FromStr};
 
-pub struct BitgetUrls {
+pub struct OkxUrls {
     pub exchange_info: Url,
     pub ws: Url,
 }
 
-pub struct BitgetMdMsg(pub RawMdMsg);
+pub struct OkxMdMsg(pub RawMdMsg);
 
-impl Deref for BitgetMdMsg {
+impl Deref for OkxMdMsg {
     type Target = RawMdMsg;
 
     fn deref(&self) -> &Self::Target {
@@ -26,21 +26,21 @@ pub struct ApiResponse {
 
 #[derive(Deserialize)]
 pub struct SymbolInfo {
-    pub symbol: String,
-    pub status: String
+    #[serde(rename = "instId")]
+    pub inst_id: String,
+
+    pub state: String
 }
 
 #[derive(Debug, Serialize)]
 pub struct SubscriptionRequest {
+    pub id: String,
     pub op: String,
     pub args: Vec<SymbolParam>
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SymbolParam {
-    #[serde(rename = "instType")]
-    pub inst_type: String,
-
     pub channel: String,
     
     #[serde(rename = "instId")]
@@ -56,16 +56,19 @@ pub enum WsMessage {
 
 #[derive(Debug, Deserialize)]
 pub struct SubscriptionConfirmation {
+    pub id: String,
     pub event: String,
-    pub arg: SymbolParam
+    pub arg: SymbolParam,
+
+    #[serde(rename = "connId")]
+    pub inst_id: String
 }
 
 #[derive(Debug, Deserialize)]
 pub struct DepthBook {
-    pub action: DepthBookAction,
     pub arg: SymbolParam,
-    pub data: Vec<BookData>,
-    pub ts: u64
+    pub action: DepthBookAction,
+    pub data: Vec<BookData>
 }
 
 #[derive(Debug, Deserialize)]
@@ -83,21 +86,25 @@ pub struct BookData {
     #[serde(deserialize_with = "deserialize_levels")]
     pub bids: Vec<(Price, Qty)>,
 
+    pub ts: String,
+
     pub checksum: i32,
 
-    pub seq: u64,
+    #[serde(rename = "seqId")]
+    pub seq_id: u64,
 
-    pub ts: String
+    #[serde(rename = "prevSeqId")]
+    pub prev_seq_id: i64,
 }
 
 fn deserialize_levels<'de, D>(deserializer: D) -> Result<Vec<(Price, Qty)>, D::Error>
 where
     D: Deserializer<'de>,
 {
-    let raw: Vec<[String; 2]> = Vec::deserialize(deserializer)?;
+    let raw: Vec<[String; 4]> = Vec::deserialize(deserializer)?;
 
     raw.into_iter()
-        .map(|[p, q]| {
+        .map(|[p, q, _, _]| {
             let price = Decimal::from_str(&p).map_err(serde::de::Error::custom)?;
             let qty = Decimal::from_str(&q).map_err(serde::de::Error::custom)?;
 

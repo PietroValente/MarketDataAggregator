@@ -18,3 +18,8 @@ max_subscription_per_ws = 50
 exchange_info = "https://api.bitget.com/api/v2/spot/public/symbols"
 ws = "wss://ws.bitget.com/v2/ws/public"
 max_subscription_per_ws = 50
+
+[okx]
+exchange_info = "https://www.okx.com/api/v5/public/instruments?instType=SPOT"
+ws = "wss://ws.okx.com:8443/ws/v5/public"
+max_subscription_per_ws = 50

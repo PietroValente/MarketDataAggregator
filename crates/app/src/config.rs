@@ -6,7 +6,8 @@ pub struct AppConfig {
     pub scylladb: ScyllaDb,
     pub channels: ChannelConfig,
     pub binance: BinanceConfig,
-    pub bitget: BitgetConfig
+    pub bitget: BitgetConfig,
+    pub okx: OkxConfig
 }
 
 #[derive(Debug, Deserialize)]
@@ -33,6 +34,13 @@ pub struct BinanceConfig {
 
 #[derive(Debug, Deserialize)]
 pub struct BitgetConfig {
+    pub exchange_info: String,
+    pub ws: String,
+    pub max_subscription_per_ws: usize,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct OkxConfig {
     pub exchange_info: String,
     pub ws: String,
     pub max_subscription_per_ws: usize,
