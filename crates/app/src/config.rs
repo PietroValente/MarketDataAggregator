@@ -7,6 +7,9 @@ pub struct AppConfig {
     pub channels: ChannelConfig,
     pub binance: BinanceConfig,
     pub bitget: BitgetConfig,
+    pub bybit: BybitConfig,
+    pub coinbase: CoinbaseConfig,
+    pub kraken: KrakenConfig,
     pub okx: OkxConfig
 }
 
@@ -34,6 +37,27 @@ pub struct BinanceConfig {
 
 #[derive(Debug, Deserialize)]
 pub struct BitgetConfig {
+    pub exchange_info: String,
+    pub ws: String,
+    pub max_subscription_per_ws: usize,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BybitConfig {
+    pub exchange_info: String,
+    pub ws: String,
+    pub max_subscription_per_ws: usize,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CoinbaseConfig {
+    pub exchange_info: String,
+    pub ws: String,
+    pub max_subscription_per_ws: usize,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct KrakenConfig {
     pub exchange_info: String,
     pub ws: String,
     pub max_subscription_per_ws: usize,

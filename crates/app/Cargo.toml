@@ -9,6 +9,7 @@ md_core = { path = "../core" }
 query = { path = "../query" }
 binance = { path = "../exchanges/binance" }
 bitget = { path = "../exchanges/bitget" }
+coinbase = { path = "../exchanges/coinbase" }
 okx = { path = "../exchanges/okx" }
 tokio = { version = "1", features = ["full"] }
 url = "2.5.8"

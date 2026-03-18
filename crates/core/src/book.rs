@@ -73,9 +73,9 @@ impl LocalBook {
     }
 
     pub fn apply_update(&mut self, update: BookUpdate) -> Result<(), LocalBookError> {
-        if update.last_update_id <= self.update_id {
-            return Ok(());
-        }
+        // if update.last_update_id <= self.update_id {
+        //     return Ok(());
+        // }
         if let Some(first_update_id) = update.first_update_id {
             if first_update_id > self.update_id + 1 {
                 return Err(LocalBookError::OutOfSync);
