@@ -1,10 +1,11 @@
 use std::{collections::{hash_map::Entry, HashMap}, time::{SystemTime, UNIX_EPOCH}};
 
+use md_core::adapter_trait::ExchangeAdapter;
 use md_core::{book::BookLevels, events::{BookEventType, EventEnvelope, NormalizedBookData, NormalizedEvent}, logging::types::Component, types::{Exchange, Instrument}};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tracing::{error, info, warn};
 
-use crate::types::{BinanceMdMsg, DepthSnapshot, WsMessage};
+use crate::types::{BinanceMdMsg, DepthSnapshot, DepthUpdate, WsMessage};
 
 pub struct BinanceAdapter {
     raw_rx: Receiver<BinanceMdMsg>,
@@ -123,5 +124,26 @@ impl BinanceAdapter {
                 }
             }
         }
+    }
+}
+
+impl ExchangeAdapter for BinanceAdapter {
+    type SnapshotPayload = DepthSnapshot;
+    type UpdatePayload = DepthUpdate;
+
+    fn exchange(&self) -> Exchange {
+        Exchange::Binance
+    }
+
+    fn validate_snapshot(&mut self, _payload: &Self::SnapshotPayload) {
+        todo!()
+    }
+
+    fn validate_update(&mut self, _payload: &Self::UpdatePayload) {
+        todo!()
+    }
+
+    fn run(&mut self) {
+        BinanceAdapter::run(self)
     }
 }

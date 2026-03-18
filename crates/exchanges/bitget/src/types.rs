@@ -51,7 +51,7 @@ pub struct SymbolParam {
 #[serde(untagged)]
 pub enum WsMessage {
     Confirmation(SubscriptionConfirmation),
-    Depth(DepthBook)
+    Depth(ParsedBookMessage)
 }
 
 #[derive(Debug, Deserialize)]
@@ -61,10 +61,10 @@ pub struct SubscriptionConfirmation {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct DepthBook {
+pub struct ParsedBookMessage {
     pub action: DepthBookAction,
     pub arg: SymbolParam,
-    pub data: Vec<BookData>,
+    pub data: Vec<ParsedBookData>,
     pub ts: u64
 }
 
@@ -76,7 +76,7 @@ pub enum DepthBookAction {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct BookData {
+pub struct ParsedBookData {
     #[serde(deserialize_with = "deserialize_levels")]
     pub asks: Vec<(Price, Qty)>,
 

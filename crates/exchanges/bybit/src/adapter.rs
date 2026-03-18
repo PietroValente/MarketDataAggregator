@@ -1,8 +1,9 @@
+use md_core::adapter_trait::ExchangeAdapter;
 use md_core::{book::BookLevels, events::{BookEventType, EventEnvelope, NormalizedBookData, NormalizedEvent}, logging::types::Component, types::{Exchange, Instrument}};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tracing::error;
 
-use crate::types::{BybitMdMsg, DepthBookAction, WsMessage};
+use crate::types::{BybitMdMsg, DepthBookAction, ParsedBookMessage, WsMessage};
 
 pub struct BybitAdapter {
     raw_rx: Receiver<BybitMdMsg>,
@@ -67,5 +68,26 @@ impl BybitAdapter {
                 }
             }
         }
+    }
+}
+
+impl ExchangeAdapter for BybitAdapter {
+    type SnapshotPayload = ParsedBookMessage;
+    type UpdatePayload = ParsedBookMessage;
+
+    fn exchange(&self) -> Exchange {
+        Exchange::Bybit
+    }
+
+    fn validate_snapshot(&mut self, _payload: &Self::SnapshotPayload) {
+        todo!()
+    }
+
+    fn validate_update(&mut self, _payload: &Self::UpdatePayload) {
+        todo!()
+    }
+
+    fn run(&mut self) {
+        BybitAdapter::run(self)
     }
 }

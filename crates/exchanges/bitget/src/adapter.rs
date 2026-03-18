@@ -1,8 +1,9 @@
+use md_core::adapter_trait::ExchangeAdapter;
 use md_core::{book::BookLevels, events::{BookEventType, EventEnvelope, NormalizedBookData, NormalizedEvent}, logging::types::Component, types::{Exchange, Instrument}};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tracing::error;
 
-use crate::types::{BitgetMdMsg, DepthBookAction, WsMessage};
+use crate::types::{BitgetMdMsg, DepthBookAction, ParsedBookMessage, WsMessage};
 
 pub struct BitgetAdapter {
     raw_rx: Receiver<BitgetMdMsg>,
@@ -73,5 +74,26 @@ impl BitgetAdapter {
                 }
             }
         }
+    }
+}
+
+impl ExchangeAdapter for BitgetAdapter {
+    type SnapshotPayload = ParsedBookMessage;
+    type UpdatePayload = ParsedBookMessage;
+
+    fn exchange(&self) -> Exchange {
+        Exchange::Bitget
+    }
+
+    fn validate_snapshot(&mut self, _payload: &Self::SnapshotPayload) {
+        todo!()
+    }
+
+    fn validate_update(&mut self, _payload: &Self::UpdatePayload) {
+        todo!()
+    }
+
+    fn run(&mut self) {
+        BitgetAdapter::run(self)
     }
 }

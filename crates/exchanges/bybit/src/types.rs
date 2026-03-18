@@ -45,7 +45,7 @@ pub struct SubscriptionRequest {
 #[serde(untagged)]
 pub enum WsMessage {
     Confirmation(SubscriptionConfirmation),
-    Depth(DepthBook)
+    Depth(ParsedBookMessage)
 }
 
 #[derive(Debug, Deserialize)]
@@ -57,7 +57,7 @@ pub struct SubscriptionConfirmation {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct DepthBook {
+pub struct ParsedBookMessage {
     pub topic: String,
 
     #[serde(rename = "type")]
@@ -65,7 +65,7 @@ pub struct DepthBook {
 
     pub ts: u64,
     pub cts: u64, 
-    pub data: BookData
+    pub data: ParsedBookData
 }
 
 #[derive(Debug, Deserialize)]
@@ -76,7 +76,7 @@ pub enum DepthBookAction {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct BookData {
+pub struct ParsedBookData {
     #[serde(rename = "s")]
     pub symbol: String,
 

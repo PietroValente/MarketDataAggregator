@@ -1,8 +1,9 @@
+use md_core::adapter_trait::ExchangeAdapter;
 use md_core::{book::BookLevels, events::{BookEventType, EventEnvelope, NormalizedBookData, NormalizedEvent}, logging::types::Component, types::{Exchange, Instrument}};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tracing::error;
 
-use crate::types::{CoinbaseMdMsg, Side, WsMessage};
+use crate::types::{CoinbaseMdMsg, DepthSnapshot, DepthUpdate, Side, WsMessage};
 
 pub struct CoinbaseAdapter {
     raw_rx: Receiver<CoinbaseMdMsg>,
@@ -75,5 +76,26 @@ impl CoinbaseAdapter {
                 }
             }
         }
+    }
+}
+
+impl ExchangeAdapter for CoinbaseAdapter {
+    type SnapshotPayload = DepthSnapshot;
+    type UpdatePayload = DepthUpdate;
+
+    fn exchange(&self) -> Exchange {
+        Exchange::Coinbase
+    }
+
+    fn validate_snapshot(&mut self, _payload: &Self::SnapshotPayload) {
+        todo!()
+    }
+
+    fn validate_update(&mut self, _payload: &Self::UpdatePayload) {
+        todo!()
+    }
+
+    fn run(&mut self) {
+        CoinbaseAdapter::run(self)
     }
 }
