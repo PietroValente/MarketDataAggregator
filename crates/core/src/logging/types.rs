@@ -39,7 +39,7 @@ pub enum LogEvent {
 #[derive(Debug)]
 pub enum Component {
     Connector,
-    Parser,
+    Adapter,
     Engine,
     ExchangeState
 }

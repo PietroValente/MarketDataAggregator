@@ -1,15 +1,15 @@
-use md_core::{book::{BookSnapshot, BookUpdate}, events::{EventEnvelope, NormalizedEvent, NormalizedSnapshot, NormalizedUpdate}, logging::types::Component, types::{Exchange, Instrument}};
+use md_core::{book::BookLevels, events::{BookEventType, EventEnvelope, NormalizedBookData, NormalizedEvent}, logging::types::Component, types::{Exchange, Instrument}};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tracing::error;
 
 use crate::types::{BybitMdMsg, DepthBookAction, WsMessage};
 
-pub struct BybitParser {
+pub struct BybitAdapter {
     raw_rx: Receiver<BybitMdMsg>,
     normalized_tx: Sender<EventEnvelope>
 }
 
-impl BybitParser {
+impl BybitAdapter {
     pub fn new(raw_rx: Receiver<BybitMdMsg>, normalized_tx: Sender<EventEnvelope>) -> Self {
         Self {
             raw_rx,
@@ -25,15 +25,14 @@ impl BybitParser {
                 },
                 Err(_) => {
                     let text = String::from_utf8_lossy(&msg);
-                    error!(exchange = ?Exchange::Bybit, component = ?Component::Parser, text = ?text, "error while parsing update");
+                    error!(exchange = ?Exchange::Bybit, component = ?Component::Adapter, text = ?text, "error while parsing update");
                 },
                 Ok(WsMessage::Depth(depth)) => {
                     match depth.action {
                         DepthBookAction::Snapshot => {
-                            let snapshot_event = NormalizedEvent::Snapshot(NormalizedSnapshot {
+                            let snapshot_event = NormalizedEvent::Book(BookEventType::Snapshot, NormalizedBookData {
                                 instrument: Instrument::from(depth.data.symbol),
-                                data: BookSnapshot {
-                                    last_update_id: depth.data.update_id,
+                                levels: BookLevels {
                                     asks: depth.data.asks,
                                     bids: depth.data.bids
                                 }
@@ -44,15 +43,13 @@ impl BybitParser {
                             };
         
                             if let Err(e) = self.normalized_tx.blocking_send(event_envelope) {
-                                error!(exchange = ?Exchange::Bybit, component = ?Component::Parser, error = ?e, "error while sending snapshot event");
+                                error!(exchange = ?Exchange::Bybit, component = ?Component::Adapter, error = ?e, "error while sending snapshot event");
                             }
                         },
                         DepthBookAction::Delta => {
-                            let snapshot_event = NormalizedEvent::Update(NormalizedUpdate {
+                            let snapshot_event = NormalizedEvent::Book(BookEventType::Update, NormalizedBookData {
                                 instrument: Instrument::from(depth.data.symbol),
-                                data: BookUpdate {
-                                    first_update_id: None,
-                                    last_update_id: depth.data.update_id,
+                                levels: BookLevels {
                                     asks: depth.data.asks,
                                     bids: depth.data.bids
                                 }
@@ -63,7 +60,7 @@ impl BybitParser {
                             };
         
                             if let Err(e) = self.normalized_tx.blocking_send(event_envelope) {
-                                error!(exchange = ?Exchange::Bybit, component = ?Component::Parser, error = ?e, "error while sending snapshot event");
+                                error!(exchange = ?Exchange::Bybit, component = ?Component::Adapter, error = ?e, "error while sending snapshot event");
                             }
                         }
                     }

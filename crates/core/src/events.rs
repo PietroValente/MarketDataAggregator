@@ -1,17 +1,17 @@
 use tokio::sync::oneshot::Sender;
 
-use crate::{book::{BookLevel, BookSnapshot, BookUpdate}, types::{Exchange, ExchangeStatus, Instrument, RawMdMsg}};
+use crate::{book::{BookLevel, BookLevels}, types::{Exchange, ExchangeStatus, Instrument, RawMdMsg}};
 
 #[derive(Debug)]
-pub struct NormalizedSnapshot {
+pub struct NormalizedBookData {
     pub instrument: Instrument,
-    pub data: BookSnapshot
+    pub levels: BookLevels
 }
 
 #[derive(Debug)]
-pub struct NormalizedUpdate {
-    pub instrument: Instrument,
-    pub data: BookUpdate
+pub enum BookEventType {
+    Snapshot,
+    Update
 }
 
 #[derive(Debug)]
@@ -31,8 +31,7 @@ pub enum NormalizedQuery {
 pub enum NormalizedEvent {
     Query(NormalizedQuery),
     Status(ExchangeStatus),
-    Snapshot(NormalizedSnapshot),
-    Update(NormalizedUpdate)
+    Book(BookEventType, NormalizedBookData)
 }
 
 #[derive(Debug)]

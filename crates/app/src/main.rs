@@ -1,10 +1,10 @@
 use std::{collections::HashMap, thread};
-use binance::{connector::BinanceConnector, parser::BinanceParser, types::{BinanceMdMsg, BinanceUrls}};
-use bitget::{connector::BitgetConnector, parser::BitgetParser, types::{BitgetMdMsg, BitgetUrls}};
-use bybit::{connector::BybitConnector, parser::BybitParser, types::{BybitMdMsg, BybitUrls}};
-use coinbase::{connector::CoinbaseConnector, parser::CoinbaseParser, types::{CoinbaseMdMsg, CoinbaseUrls}};
+use binance::{connector::BinanceConnector, adapter::BinanceAdapter, types::{BinanceMdMsg, BinanceUrls}};
+use bitget::{connector::BitgetConnector, adapter::BitgetAdapter, types::{BitgetMdMsg, BitgetUrls}};
+use bybit::{connector::BybitConnector, adapter::BybitAdapter, types::{BybitMdMsg, BybitUrls}};
+use coinbase::{connector::CoinbaseConnector, adapter::CoinbaseAdapter, types::{CoinbaseMdMsg, CoinbaseUrls}};
 use engine::Engine;
-use okx::{connector::OkxConnector, parser::OkxParser, types::{OkxMdMsg, OkxUrls}};
+use okx::{connector::OkxConnector, adapter::OkxAdapter, types::{OkxMdMsg, OkxUrls}};
 use query::query_manager::QueryManager;
 use tokio::sync::mpsc::channel;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -58,12 +58,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     /* ENGINE */
     let (normalized_tx, normalized_rx) = channel::<EventEnvelope>(config.channels.normalized_buffer);
-    let mut engine = Engine::new(normalized_rx, control_senders);
+    let mut engine = Engine::new(normalized_rx, control_senders.keys().cloned().collect());
     thread::spawn(move || {
         engine.run();
     });
 
-    /* PARSERS */
+    /* ADAPTERS */
     let (binance_raw_tx, binance_raw_rx) = channel::<BinanceMdMsg>(config.channels.raw_buffer);
     let (bitget_raw_tx, bitget_raw_rx) = channel::<BitgetMdMsg>(config.channels.raw_buffer);
     let (bybit_raw_tx, bybit_raw_rx) = channel::<BybitMdMsg>(config.channels.raw_buffer);
@@ -71,30 +71,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // let (kraken_raw_tx, kraken_raw_rx) = channel::<KrakenMdMsg>(config.channels.raw_buffer);
     let (okx_raw_tx, okx_raw_rx) = channel::<OkxMdMsg>(config.channels.raw_buffer);
 
-    let mut binance_parser = BinanceParser::new(binance_raw_rx, normalized_tx.clone());
-    let mut bitget_parser = BitgetParser::new(bitget_raw_rx, normalized_tx.clone());
-    let mut bybit_parser = BybitParser::new(bybit_raw_rx, normalized_tx.clone());
-    let mut coinbase_parser = CoinbaseParser::new(coinbase_raw_rx, normalized_tx.clone());
-    // let mut kraken_parser = KrakenParser::new(kraken_raw_rx, normalized_tx.clone());
-    let mut okx_parser = OkxParser::new(okx_raw_rx, normalized_tx.clone());
+    let mut binance_adapter = BinanceAdapter::new(binance_raw_rx, normalized_tx.clone());
+    let mut bitget_adapter = BitgetAdapter::new(bitget_raw_rx, normalized_tx.clone());
+    let mut bybit_adapter = BybitAdapter::new(bybit_raw_rx, normalized_tx.clone());
+    let mut coinbase_adapter = CoinbaseAdapter::new(coinbase_raw_rx, normalized_tx.clone());
+    // let mut kraken_adapter = KrakenAdapter::new(kraken_raw_rx, normalized_tx.clone());
+    let mut okx_adapter = OkxAdapter::new(okx_raw_rx, normalized_tx.clone());
     
     thread::spawn(move || {
-        binance_parser.run();
+        binance_adapter.run();
     });
     thread::spawn(move || {
-        bitget_parser.run();
+        bitget_adapter.run();
     });
     thread::spawn(move || {
-        bybit_parser.run();
+        bybit_adapter.run();
     });
     thread::spawn(move || {
-        coinbase_parser.run();
+        coinbase_adapter.run();
     });
     // thread::spawn(move || {
-    //     kraken_parser.run();
+    //     kraken_adapter.run();
     // });
     thread::spawn(move || {
-        okx_parser.run();
+        okx_adapter.run();
     });
     
     /* CONNECTORS */
