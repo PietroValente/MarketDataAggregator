@@ -21,8 +21,8 @@ max_subscription_per_ws = 50
 
 [bybit]
 exchange_info = "https://api.bybit.com/v5/market/instruments-info?category=spot"
-ws = "wss://ws.bitget.com/v2/ws/public"
-max_subscription_per_ws = 50
+ws = "wss://stream.bybit.com/v5/public/spot"
+max_subscription_per_ws = 10
 
 [coinbase]
 exchange_info = "https://api.coinbase.com/api/v3/brokerage/market/products"

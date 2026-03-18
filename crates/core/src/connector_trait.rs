@@ -27,10 +27,10 @@ pub trait ExchangeConnector {
     type SubscriptionPayload;
 
     async fn get_subscriptions_list(rest_url: &Url) -> Result<Vec<String>, Box<dyn Error + Send + Sync>>;
-    async fn build_subscriptions(rest_url: &Url, max_subscription_per_ws: usize) -> Result<Vec<Self::SubscriptionPayload>, Box<dyn Error + Send + Sync>>; //create Vec<Message> ready to be sent
-    async fn subscribe_streams(&mut self) -> Result<(), Box<dyn Error + Send + Sync>>; //subscribe to all messages, creates one reader_task/writer_task for each ws creato, salva tutti i reader_task/writer_task handler in un vettore
+    async fn build_subscriptions(rest_url: &Url, max_subscription_per_ws: usize) -> Result<Vec<Self::SubscriptionPayload>, Box<dyn Error + Send + Sync>>;
+    async fn subscribe_streams(&mut self) -> Result<(), Box<dyn Error + Send + Sync>>;
     async fn pong(&self, msg: PingMsg) -> Result<(), Box<dyn Error + Send + Sync>>;
-    async fn start(&mut self); // is the only func the user calls, at the beginning calls subscribe_streams, inside loop receiver on InboundEvents
+    async fn start(&mut self);
     async fn reader_task(
         ws_id: u8,
         ws_url: Arc<Url>,
