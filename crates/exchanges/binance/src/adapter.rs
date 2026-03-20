@@ -1,6 +1,6 @@
-use std::{collections::{hash_map::Entry, HashMap}, time::{SystemTime, UNIX_EPOCH}};
+use std::{collections::{hash_map::Entry, HashMap}, error::Error, time::{SystemTime, UNIX_EPOCH}};
 
-use md_core::adapter_trait::ExchangeAdapter;
+use md_core::{adapter_trait::ExchangeAdapter, events::ControlEvent};
 use md_core::{book::BookLevels, events::{BookEventType, EventEnvelope, NormalizedBookData, NormalizedEvent}, logging::types::Component, types::{Exchange, Instrument}};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tracing::{error, info, warn};
@@ -10,15 +10,17 @@ use crate::types::{BinanceMdMsg, ParsedBookSnapshot, ParsedBookUpdate, WsMessage
 pub struct BinanceAdapter {
     raw_rx: Receiver<BinanceMdMsg>,
     normalized_tx: Sender<EventEnvelope>,
-    symbols_pending_snapshot: HashMap<Instrument, Vec<EventEnvelope>>
+    symbols_pending_snapshot: HashMap<Instrument, Vec<EventEnvelope>>,
+    control_tx: Sender<ControlEvent>
 }
 
 impl BinanceAdapter {
-    pub fn new(raw_rx: Receiver<BinanceMdMsg>, normalized_tx: Sender<EventEnvelope>) -> Self {
+    pub fn new(raw_rx: Receiver<BinanceMdMsg>, normalized_tx: Sender<EventEnvelope>, control_tx: Sender<ControlEvent>) -> Self {
         Self {
             raw_rx,
             normalized_tx,
-            symbols_pending_snapshot: HashMap::new()
+            symbols_pending_snapshot: HashMap::new(),
+            control_tx
         }
     }
 
@@ -34,6 +36,14 @@ impl BinanceAdapter {
         }
     }
 
+    fn validate_snapshot(&mut self, _payload: &ParsedBookSnapshot) -> Result<(), Box<dyn Error + Send + Sync>> {
+        Ok(())
+    }
+
+    fn validate_update(&mut self, _payload: &ParsedBookUpdate) -> Result<(), Box<dyn Error + Send + Sync>> {
+        Ok(())
+    }
+
     pub fn run(&mut self) {
         while let Some(msg) = self.raw_rx.blocking_recv() {
             match msg {
@@ -47,6 +57,12 @@ impl BinanceAdapter {
                         error!(exchange = ?Exchange::Binance, component = ?Component::Adapter, symbol = ?payload.symbol, text = ?String::from_utf8(payload.payload.clone()).unwrap(), "error while parsing snapshot");
                         continue;
                     };
+                    if let Err(e) = self.validate_snapshot(&parsed_snapshot) {
+                        error!(exchange = ?Exchange::Binance, component = ?Component::Adapter, symbol = ?payload.symbol, error = ?e, "error while validating snapshot");
+                        if let Err(e) = self.control_tx.blocking_send(ControlEvent::Resync) {
+                            error!(exchange = ?Exchange::Binance, component = ?Component::Adapter, error = ?e, "error while sending resync");
+                        }
+                    }
                     let book_snapshot = BookLevels {
                         asks: parsed_snapshot.asks,
                         bids: parsed_snapshot.bids
@@ -78,11 +94,16 @@ impl BinanceAdapter {
                             error!(exchange = ?Exchange::Binance, component = ?Component::Adapter, text = ?text, "error while parsing update");
                         },
                         Ok(WsMessage::Update(update)) => {
+                            if let Err(e) = self.validate_update(&update) {
+                                error!(exchange = ?Exchange::Binance, component = ?Component::Adapter, symbol = ?update.symbol, error = ?e, "error while validating snapshot");
+                                if let Err(e) = self.control_tx.blocking_send(ControlEvent::Resync) {
+                                    error!(exchange = ?Exchange::Binance, component = ?Component::Adapter, error = ?e, "error while sending resync");
+                                }
+                            }
                             if update.event_type != "depthUpdate" {
                                 error!(exchange = ?Exchange::Binance, component = ?Component::Adapter, symbol = ?update.symbol, "unknown type of event: {}", update.event_type);
                                 continue;
                             }
-        
                             let now = SystemTime::now()
                                 .duration_since(UNIX_EPOCH)
                                 .unwrap()
@@ -135,12 +156,12 @@ impl ExchangeAdapter for BinanceAdapter {
         Exchange::Binance
     }
 
-    fn validate_snapshot(&mut self, _payload: &Self::SnapshotPayload) {
-        todo!()
+    fn validate_snapshot(&mut self, payload: &Self::SnapshotPayload) -> Result<(), Box<dyn Error + Send + Sync>> {
+        BinanceAdapter::validate_snapshot(self, payload)
     }
 
-    fn validate_update(&mut self, _payload: &Self::UpdatePayload) {
-        todo!()
+    fn validate_update(&mut self, payload: &Self::UpdatePayload) -> Result<(), Box<dyn Error + Send + Sync>> {
+        BinanceAdapter::validate_update(self, payload)
     }
 
     fn run(&mut self) {

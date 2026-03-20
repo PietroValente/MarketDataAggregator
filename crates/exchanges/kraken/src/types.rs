@@ -76,7 +76,7 @@ pub struct ParsedBookMessage {
     pub data: Vec<ParsedBookData>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum DepthBookAction {
     Snapshot,

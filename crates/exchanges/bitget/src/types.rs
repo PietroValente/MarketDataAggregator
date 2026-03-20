@@ -68,7 +68,7 @@ pub struct ParsedBookMessage {
     pub ts: u64
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum DepthBookAction {
     Snapshot,

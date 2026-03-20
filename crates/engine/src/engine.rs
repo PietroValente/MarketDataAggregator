@@ -11,9 +11,9 @@ pub struct Engine {
 }
 
 impl Engine {
-    pub fn new(rx: Receiver<EventEnvelope>, control_senders: Vec<Exchange>) -> Self  {
+    pub fn new(rx: Receiver<EventEnvelope>, exchanges: Vec<Exchange>) -> Self  {
         let mut map = HashMap::new();
-        for exchange in control_senders {
+        for exchange in exchanges {
             map.insert(exchange, ExchangeState::new(exchange));
         }
         Self {

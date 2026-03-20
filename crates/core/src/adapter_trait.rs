@@ -1,3 +1,5 @@
+use std::error::Error;
+
 use crate::types::Exchange;
 
 /// Common interface for exchange-specific adapters.
@@ -12,10 +14,10 @@ pub trait ExchangeAdapter {
     fn exchange(&self) -> Exchange;
 
     /// Validate a parsed snapshot payload.
-    fn validate_snapshot(&mut self, payload: &Self::SnapshotPayload);
+    fn validate_snapshot(&mut self, payload: &Self::SnapshotPayload) -> Result<(), Box<dyn Error + Send + Sync>>;
 
     /// Validate a parsed update payload.
-    fn validate_update(&mut self, payload: &Self::UpdatePayload);
+    fn validate_update(&mut self, payload: &Self::UpdatePayload) -> Result<(), Box<dyn Error + Send + Sync>>;
 
     /// Run the adapter event loop (typically until the inbound stream is closed).
     fn run(&mut self);
