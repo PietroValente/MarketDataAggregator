@@ -59,8 +59,15 @@ impl BybitConnector {
 impl ExchangeConnector for BybitConnector {
     type SubscriptionPayload = Message;
 
+    fn exchange() -> Exchange {
+        Exchange::Bybit
+    }
+
     async fn get_subscriptions_list(rest_url: &Url) -> Result<Vec<String>, Box<dyn Error + Send + Sync>> {
-        let client = Client::new();
+        let client = Client::builder()
+                        .connect_timeout(Duration::from_secs(3))
+                        .timeout(Duration::from_secs(15))
+                        .build()?;
         let resp = client.get(rest_url.as_str())
                             .send().await?
                             .json::<ApiResponse>().await?;
@@ -74,7 +81,7 @@ impl ExchangeConnector for BybitConnector {
     }
 
     async fn build_subscriptions(rest_url: &Url, max_subscription_per_ws: usize) -> Result<Vec<Message>, Box<dyn Error + Send + Sync>>{
-        let mut list = BybitConnector::get_subscriptions_list(rest_url).await?;
+        let mut list = BybitConnector::get_subscriptions_list_backoff(rest_url).await;
         let subscriptions_payloads_len = (list.len()/max_subscription_per_ws) + 1;
         let mut result = Vec::new();
         let update_settings = "orderbook.200.";

@@ -61,8 +61,15 @@ impl BinanceConnector {
 impl ExchangeConnector for BinanceConnector {
     type SubscriptionPayload = BinanceSubscriptionMsg;
 
+    fn exchange() -> Exchange {
+        Exchange::Binance
+    }
+
     async fn get_subscriptions_list(rest_url: &Url) -> Result<Vec<String>, Box<dyn Error + Send + Sync>> {
-        let client = Client::new();
+        let client = Client::builder()
+                        .connect_timeout(Duration::from_secs(3))
+                        .timeout(Duration::from_secs(30))
+                        .build()?;
         let resp = client.get(rest_url.as_str())
                             .send().await?
                             .json::<ApiResponse>().await?;
@@ -76,7 +83,7 @@ impl ExchangeConnector for BinanceConnector {
     }
 
     async fn build_subscriptions(rest_url: &Url, max_subscription_per_ws: usize) -> Result<Vec<BinanceSubscriptionMsg>, Box<dyn Error + Send + Sync>>{
-        let mut list = BinanceConnector::get_subscriptions_list(rest_url).await?;
+        let mut list = BinanceConnector::get_subscriptions_list_backoff(rest_url).await;
         let subscriptions_payloads_len = (list.len()/max_subscription_per_ws) + 1;
         let mut result = Vec::new();
         let update_settings = "@depth@100ms";

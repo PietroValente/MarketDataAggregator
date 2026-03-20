@@ -1,6 +1,8 @@
 use std::error::Error;
 use std::sync::Arc;
+use std::time::Duration;
 
+use tokio::time::sleep;
 use tokio::{net::TcpStream, task::JoinHandle};
 use tokio::sync::mpsc::Sender;
 use tokio_tungstenite::{tungstenite::Message, MaybeTlsStream, WebSocketStream};
@@ -9,7 +11,8 @@ use tracing::{error, warn};
 use url::Url;
 
 use crate::events::{InboundEvent, PingMsg};
-use crate::types::RawMdMsg;
+use crate::logging::types::Component;
+use crate::types::{Exchange, RawMdMsg};
 
 /// Commands that can be issued to a connection writer task.
 pub enum WriteCommand {
@@ -35,8 +38,8 @@ pub trait ExchangeConnector {
     /// Type used to represent a single subscription payload for this exchange.
     type SubscriptionPayload;
 
-    /// Fetch the list of symbols/instruments to subscribe to via REST.
-    async fn get_subscriptions_list(rest_url: &Url) -> Result<Vec<String>, Box<dyn Error + Send + Sync>>;
+    /// Exchange identifier for logging/telemetry.
+    fn exchange() -> Exchange;
 
     /// Build websocket subscription payloads, splitting the symbol list across multiple connections if needed.
     async fn build_subscriptions(rest_url: &Url, max_subscription_per_ws: usize) -> Result<Vec<Self::SubscriptionPayload>, Box<dyn Error + Send + Sync>>;
@@ -49,6 +52,36 @@ pub trait ExchangeConnector {
 
     /// Run the connector event loop (typically until the inbound channel is closed).
     async fn start(&mut self);
+
+    /// Fetch the list of symbols/instruments to subscribe to via REST.
+    async fn get_subscriptions_list(rest_url: &Url) -> Result<Vec<String>, Box<dyn Error + Send + Sync>>;
+
+    /// Backoff wrapper around `get_subscriptions_list`.
+    ///
+    /// Useful when the REST call can fail transiently or take too long due to unstable connectivity.
+    /// Retries until success with an exponential backoff capped to the last value (60s).
+    async fn get_subscriptions_list_backoff(
+        rest_url: &Url
+    ) -> Vec<String> {
+        let backoff_secs = [1, 5, 15, 30, 60];
+        let mut attempt: usize = 0;
+    
+        loop {
+            match Self::get_subscriptions_list(rest_url).await {
+                Ok(subscriptions) => {
+                    return subscriptions;
+                }
+                Err(e) => {
+                    error!(exchange = ?Self::exchange(), component = ?Component::Connector, error = ?e, "error while building subscriptions");
+                    let delay = *backoff_secs
+                        .get(attempt)
+                        .unwrap_or(backoff_secs.last().unwrap());
+                    attempt = attempt.saturating_add(1);
+                    sleep(Duration::from_secs(delay)).await; // After the last stage we keep retrying every 60s
+                }
+            }
+        }
+    }
 
     /// Default websocket reader task shared across exchanges.
     ///
