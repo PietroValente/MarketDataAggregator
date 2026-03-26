@@ -239,7 +239,7 @@ impl QueryManager {
                 println!("{}", a);
             }
 
-            println!("---------------------------");
+            println!("      --------------------");
 
             for b in bids.iter() {
                 println!("{}", b);

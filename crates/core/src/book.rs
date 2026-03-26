@@ -1,4 +1,6 @@
 use std::{cmp::Reverse, collections::BTreeMap, fmt::Display};
+use rust_decimal::Decimal;
+
 use crate::types::{Price, Qty};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,7 +28,15 @@ impl BookLevel {
 
 impl Display for BookLevel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}   {}", self.px, self.qty)
+        fn fmt_decimal(mut x: Decimal, scale: u32) -> String {
+            x.rescale(scale);
+            x.to_string()
+        }
+
+        let px = fmt_decimal(self.px.0, 2);
+        let qty = fmt_decimal(self.qty.0, 5);
+
+        write!(f, "{:>12}   {:>12}", px, qty)
     }
 }
 
