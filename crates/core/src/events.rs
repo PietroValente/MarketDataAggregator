@@ -17,20 +17,21 @@ pub enum BookEventType {
 #[derive(Debug)]
 pub struct NormalizedTop {
     pub instrument: Instrument,
-    pub n: usize,
-    pub reply_to: Sender<Vec<BookLevel>>
+    pub n: usize
 }
 
 #[derive(Debug)]
 pub enum NormalizedQuery {
-    TopAsk(NormalizedTop),
-    TopBid(NormalizedTop)
+    TopAsk(Sender<Vec<BookLevel>>, NormalizedTop),
+    TopBid(Sender<Vec<BookLevel>>, NormalizedTop),
+    GetStatus(Sender<ExchangeStatus>)
 }
 
 #[derive(Debug)]
 pub enum NormalizedEvent {
     Query(NormalizedQuery),
-    Status(ExchangeStatus),
+    ApplyStatus(ExchangeStatus),
+    GetStatus,
     Book(BookEventType, NormalizedBookData)
 }
 

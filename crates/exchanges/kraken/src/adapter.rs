@@ -36,7 +36,6 @@ impl KrakenAdapter {
             match serde_json::from_slice::<WsMessage>(&msg) {
                 Ok(WsMessage::Confirmation(msg)) => {
                     if !msg.success {
-                        println!("symbol: {}", msg.result.symbol);
                         error!(exchange = ?Exchange::Kraken, component = ?Component::Adapter, msg = ?msg, "subscription not confirmed");
                     }
                     continue;

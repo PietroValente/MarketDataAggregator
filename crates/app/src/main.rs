@@ -27,18 +27,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with(log_layer)
         .init();
 
-    tokio::spawn(async move {
-        let mut log_writer =  match DbLoggingWriter::new(&config.scylladb.uri, &config.scylladb.init_path, log_rx).await {
-            Ok(writer) => {writer},
-            Err(e) => {
-                eprintln!("Error while creating log writer: {:?}", e);
-                return;
-            }
-        };
-        if let Err(e) = log_writer.start().await {
-            eprintln!("Error while running the log writer: {:?}", e);
-        };
-    });
+    let log_writer =  match DbLoggingWriter::new(&config.scylladb.uri, &config.scylladb.init_path, log_rx).await {
+        Ok(writer) => {Some(writer)},
+        Err(e) => {
+            eprintln!("Logging disabled: failed to initialize DB writer");
+            eprintln!("Error: {:?}", e);
+            eprintln!("-------------------------------------");
+            None
+        }
+    };
+    if let Some(mut log_writer) = log_writer {
+        tokio::spawn(async move {
+            if let Err(e) = log_writer.start().await {
+                eprintln!("Error while running the log writer: {:?}", e);
+            };
+        });
+    }
 
     /* CONTROL CHANNELS */
     let (binance_control_tx, binance_control_rx) = channel::<ControlEvent>(config.channels.control_buffer);

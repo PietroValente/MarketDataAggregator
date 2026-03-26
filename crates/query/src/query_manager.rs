@@ -77,7 +77,26 @@ impl QueryManager {
                         continue;
                     }
 
-                    //TODO: get exchange status
+                    let (status_tx, status_rx) = oneshot::channel();
+
+                    let status_event = EventEnvelope {
+                        exchange,
+                        event: NormalizedEvent::Query(NormalizedQuery::GetStatus(status_tx)),
+                    };
+                    if let Err(e) = self.normalized_tx.blocking_send(status_event) {
+                        eprintln!("Error while sending the status request: {}", e);
+                        continue;
+                    }
+
+                    match status_rx.blocking_recv() {
+                        Ok(msg) => {
+                            println!("{} status: {}", exchange, msg);
+                        },
+                        Err(e) => {
+                            eprintln!("Error while receiving the status data: {}", e);
+                            continue;
+                        }
+                    }
                 }
                 "exit" => {
                     return;
@@ -132,19 +151,17 @@ impl QueryManager {
 
                 let asks_event = EventEnvelope {
                     exchange,
-                    event: NormalizedEvent::Query(NormalizedQuery::TopAsk(NormalizedTop {
+                    event: NormalizedEvent::Query(NormalizedQuery::TopAsk(asks_tx, NormalizedTop {
                         instrument: Instrument::from(instrument.clone()),
-                        n,
-                        reply_to: asks_tx,
+                        n
                     })),
                 };
 
                 let bids_event = EventEnvelope {
                     exchange,
-                    event: NormalizedEvent::Query(NormalizedQuery::TopBid(NormalizedTop {
+                    event: NormalizedEvent::Query(NormalizedQuery::TopBid(bids_tx, NormalizedTop {
                         instrument: Instrument::from(instrument.clone()),
-                        n,
-                        reply_to: bids_tx,
+                        n
                     })),
                 };
 

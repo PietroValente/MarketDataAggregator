@@ -30,8 +30,11 @@ impl Engine {
             };
 
             match event {
-                NormalizedEvent::Status(data) => {
+                NormalizedEvent::ApplyStatus(data) => {
                     exchange_state.apply_status(data);
+                },
+                NormalizedEvent::GetStatus => {
+                    exchange_state.get_status();
                 },
                 NormalizedEvent::Book(event_type, book_data) => {
                     match event_type {
@@ -47,34 +50,40 @@ impl Engine {
                 },
                 NormalizedEvent::Query(query) => {
                     match query {
-                        NormalizedQuery::TopAsk(data) => {
+                        NormalizedQuery::TopAsk(reply_to, data) => {
                             match exchange_state.top_n_ask(&data) {
                                 Ok(vec) => {
-                                    if let Err(e) = data.reply_to.send(vec) {
+                                    if let Err(e) = reply_to.send(vec) {
                                         error!(exchange = ?exchange, component = ?Component::Engine, error = ?e, "top_n_ask error")
                                     }
                                 },
                                 Err(e) => {
                                     error!(exchange = ?exchange, component = ?Component::Engine, error = ?e, "top_n_ask error");
-                                    if let Err(e) = data.reply_to.send(Vec::new()) {
+                                    if let Err(e) = reply_to.send(Vec::new()) {
                                         error!(exchange = ?exchange, component = ?Component::Engine, error = ?e, "top_n_ask error")
                                     }
                                 }
                             }
                         },
-                        NormalizedQuery::TopBid(data) => {
+                        NormalizedQuery::TopBid(reply_to, data) => {
                             match exchange_state.top_n_bid(&data) {
                                 Ok(vec) => {
-                                    if let Err(e) = data.reply_to.send(vec) {
+                                    if let Err(e) = reply_to.send(vec) {
                                         error!(exchange = ?exchange, component = ?Component::Engine, error = ?e, "top_n_bid error")
                                     }
                                 },
                                 Err(e) => {
                                     error!(exchange = ?exchange, component = ?Component::Engine, error = ?e, "top_n_bid error");
-                                    if let Err(e) = data.reply_to.send(Vec::new()) {
+                                    if let Err(e) = reply_to.send(Vec::new()) {
                                         error!(exchange = ?exchange, component = ?Component::Engine, error = ?e, "top_n_bid error")
                                     }
                                 }
+                            }
+                        },
+                        NormalizedQuery::GetStatus(reply_to) => {
+                            let status = exchange_state.get_status();
+                            if let Err(e) = reply_to.send(status) {
+                                error!(exchange = ?exchange, component = ?Component::Engine, error = ?e, "get_status error")
                             }
                         }
                     }
@@ -123,10 +132,9 @@ mod tests {
 
         tx.blocking_send(envelope(
             Exchange::Binance,
-            NormalizedEvent::Query(NormalizedQuery::TopAsk(NormalizedTop {
+            NormalizedEvent::Query(NormalizedQuery::TopAsk(reply_tx, NormalizedTop {
                 instrument: inst,
-                n: 10,
-                reply_to: reply_tx,
+                n: 10
             })),
         ))
         .expect("send query");
@@ -178,10 +186,9 @@ mod tests {
         let (reply_tx, reply_rx) = oneshot::channel::<Vec<BookLevel>>();
         tx.blocking_send(envelope(
             Exchange::Binance,
-            NormalizedEvent::Query(NormalizedQuery::TopAsk(NormalizedTop {
+            NormalizedEvent::Query(NormalizedQuery::TopAsk(reply_tx, NormalizedTop {
                 instrument: inst,
-                n: 5,
-                reply_to: reply_tx,
+                n: 5
             })),
         ))
         .expect("send top ask query");
@@ -232,10 +239,9 @@ mod tests {
         let (reply_tx, reply_rx) = oneshot::channel::<Vec<BookLevel>>();
         tx.blocking_send(envelope(
             Exchange::Binance,
-            NormalizedEvent::Query(NormalizedQuery::TopBid(NormalizedTop {
+            NormalizedEvent::Query(NormalizedQuery::TopBid(reply_tx, NormalizedTop {
                 instrument: inst,
-                n: 3,
-                reply_to: reply_tx,
+                n: 3
             })),
         ))
         .expect("send top bid query");
@@ -244,6 +250,37 @@ mod tests {
         engine.run();
         let bids = reply_rx.blocking_recv().expect("reply received");
         assert_eq!(bids, vec![BookLevel::new(qty(3000), price(800))]);
+    }
+
+    #[test]
+    fn apply_status_and_get_status_query_return_last_status() {
+        let (tx, rx) = mpsc::channel(32);
+        let mut engine = Engine::new(rx, vec![Exchange::Binance]);
+
+        tx.blocking_send(envelope(
+            Exchange::Binance,
+            NormalizedEvent::ApplyStatus(ExchangeStatus::Running),
+        ))
+        .expect("send running status");
+        tx.blocking_send(envelope(
+            Exchange::Binance,
+            NormalizedEvent::ApplyStatus(ExchangeStatus::Error("feed lag".to_string())),
+        ))
+        .expect("send error status");
+
+        let (reply_tx, reply_rx) = oneshot::channel::<ExchangeStatus>();
+        tx.blocking_send(envelope(
+            Exchange::Binance,
+            NormalizedEvent::Query(NormalizedQuery::GetStatus(reply_tx)),
+        ))
+        .expect("send get status query");
+        drop(tx);
+
+        engine.run();
+        match reply_rx.blocking_recv().expect("status reply received") {
+            ExchangeStatus::Error(msg) => assert_eq!(msg, "feed lag"),
+            other => panic!("expected Error status, got {other:?}"),
+        }
     }
 
     #[test]
@@ -318,7 +355,7 @@ mod tests {
                 } else {
                     ExchangeStatus::Initializing
                 };
-                tx.blocking_send(envelope(ex, NormalizedEvent::Status(status)))
+                tx.blocking_send(envelope(ex, NormalizedEvent::ApplyStatus(status)))
                     .expect("send status");
             }
 
@@ -429,19 +466,17 @@ mod tests {
 
                 tx.blocking_send(envelope(
                     ex,
-                    NormalizedEvent::Query(NormalizedQuery::TopAsk(NormalizedTop {
+                    NormalizedEvent::Query(NormalizedQuery::TopAsk(ask_tx, NormalizedTop {
                         instrument: inst.clone(),
-                        n,
-                        reply_to: ask_tx,
+                        n
                     })),
                 ))
                 .expect("send ask query");
                 tx.blocking_send(envelope(
                     ex,
-                    NormalizedEvent::Query(NormalizedQuery::TopBid(NormalizedTop {
+                    NormalizedEvent::Query(NormalizedQuery::TopBid(bid_tx, NormalizedTop {
                         instrument: inst.clone(),
-                        n,
-                        reply_to: bid_tx,
+                        n
                     })),
                 ))
                 .expect("send bid query");
@@ -475,19 +510,17 @@ mod tests {
         let (m_bid_tx, m_bid_rx) = oneshot::channel::<Vec<BookLevel>>();
         tx.blocking_send(envelope(
             Exchange::Binance,
-            NormalizedEvent::Query(NormalizedQuery::TopAsk(NormalizedTop {
+            NormalizedEvent::Query(NormalizedQuery::TopAsk(m_ask_tx, NormalizedTop {
                 instrument: missing.clone(),
-                n: 10,
-                reply_to: m_ask_tx,
+                n: 10
             })),
         ))
         .expect("send missing ask query");
         tx.blocking_send(envelope(
             Exchange::Binance,
-            NormalizedEvent::Query(NormalizedQuery::TopBid(NormalizedTop {
+            NormalizedEvent::Query(NormalizedQuery::TopBid(m_bid_tx, NormalizedTop {
                 instrument: missing,
-                n: 10,
-                reply_to: m_bid_tx,
+                n: 10
             })),
         ))
         .expect("send missing bid query");

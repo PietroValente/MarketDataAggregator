@@ -1,4 +1,4 @@
-use std::{error::Error, fmt, ops::{Deref, DerefMut}};
+use std::{fmt, ops::{Deref, DerefMut}};
 use rust_decimal::Decimal;
 use serde::Deserialize;
 
@@ -93,11 +93,21 @@ impl From<&str> for Exchange {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ExchangeStatus {
     Initializing,
     Running,
-    Error(Box<dyn Error + Send + Sync>)
+    Error(String)
+}
+
+impl fmt::Display for ExchangeStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ExchangeStatus::Initializing => write!(f, "Initializing"),
+            ExchangeStatus::Running => write!(f, "Running"),
+            ExchangeStatus::Error(error) => write!(f, "Error: {}", error)
+        }
+    }
 }
 
 #[derive(Debug)]

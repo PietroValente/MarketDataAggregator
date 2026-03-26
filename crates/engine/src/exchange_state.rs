@@ -37,8 +37,8 @@ impl ExchangeState {
         self.status = status;
     }
 
-    pub fn get_status(&self) -> &ExchangeStatus {
-        &self.status
+    pub fn get_status(&self) -> ExchangeStatus {
+        self.status.clone()
     }
 
     pub fn top_n_ask(&self, top: &NormalizedTop) -> Result<Vec<BookLevel>, ExchangeStateError> {
@@ -70,7 +70,7 @@ mod tests {
     use rand::{Rng, SeedableRng, rngs::StdRng};
     use rust_decimal::Decimal;
     use std::collections::BTreeMap;
-    use tokio::sync::oneshot;
+    use tokio::sync::oneshot::{self, Sender};
 
     fn instrument(name: &str) -> Instrument {
         Instrument(name.to_string())
@@ -84,13 +84,12 @@ mod tests {
         Qty(Decimal::new(v, 3))
     }
 
-    fn mk_top(instrument: Instrument, n: usize) -> NormalizedTop {
+    fn mk_top(instrument: Instrument, n: usize) -> (Sender<Vec<BookLevel>>, NormalizedTop) {
         let (tx, _rx) = oneshot::channel();
-        NormalizedTop {
+        (tx, NormalizedTop {
             instrument,
-            n,
-            reply_to: tx,
-        }
+            n
+        })
     }
 
     #[test]
@@ -110,6 +109,21 @@ mod tests {
             ExchangeStateError::InstrumentNotFound(inst) => {
                 assert_eq!(inst, instrument("BTCUSDT"));
             }
+        }
+    }
+
+    #[test]
+    fn status_defaults_to_initializing_and_transitions_are_persisted() {
+        let mut state = ExchangeState::new(Exchange::Coinbase);
+        assert!(matches!(state.get_status(), ExchangeStatus::Initializing));
+
+        state.apply_status(ExchangeStatus::Running);
+        assert!(matches!(state.get_status(), ExchangeStatus::Running));
+
+        state.apply_status(ExchangeStatus::Error("ws disconnected".to_string()));
+        match state.get_status() {
+            ExchangeStatus::Error(msg) => assert_eq!(msg, "ws disconnected"),
+            other => panic!("expected Error status, got {other:?}"),
         }
     }
 
@@ -136,8 +150,10 @@ mod tests {
             })
             .expect("update after snapshot must work");
 
-        let ask_top = state.top_n_ask(&mk_top(inst.clone(), 10)).unwrap();
-        let bid_top = state.top_n_bid(&mk_top(inst.clone(), 10)).unwrap();
+        let (_, data) = mk_top(inst.clone(), 10);
+
+        let ask_top = state.top_n_ask(&data).unwrap();
+        let bid_top = state.top_n_bid(&data).unwrap();
 
         assert_eq!(
             ask_top,
@@ -174,12 +190,14 @@ mod tests {
             },
         });
 
+        let (_, data) = mk_top(inst.clone(), 10);
+
         assert_eq!(
-            state.top_n_ask(&mk_top(inst.clone(), 10)).unwrap(),
+            state.top_n_ask(&data).unwrap(),
             vec![BookLevel::new(qty(5000), price(1200))]
         );
         assert_eq!(
-            state.top_n_bid(&mk_top(inst, 10)).unwrap(),
+            state.top_n_bid(&data).unwrap(),
             vec![BookLevel::new(qty(6000), price(700))]
         );
     }
@@ -319,8 +337,9 @@ mod tests {
             }
 
             let n = rng.gen_range(0..40);
-            let got_asks = state.top_n_ask(&mk_top(inst.clone(), n)).unwrap();
-            let got_bids = state.top_n_bid(&mk_top(inst.clone(), n)).unwrap();
+            let (_, data) = mk_top(inst.clone(), n);
+            let got_asks = state.top_n_ask(&data).unwrap();
+            let got_bids = state.top_n_bid(&data).unwrap();
 
             let exp_asks: Vec<BookLevel> = ask_ref
                 .get(&inst)
