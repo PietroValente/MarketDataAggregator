@@ -17,4 +17,5 @@ scylla = "1.5"
 uuid = { version = "1", features = ["v1"] }
 
 [dev-dependencies]
+rand = "0.8"
 rust_decimal_macros = "1"
