@@ -2,6 +2,7 @@ use std::error::Error;
 use std::sync::Arc;
 use std::time::Duration;
 
+use reqwest::Client;
 use tokio::time::sleep;
 use tokio::{net::TcpStream, task::JoinHandle};
 use tokio::sync::mpsc::Sender;
@@ -42,32 +43,33 @@ pub trait ExchangeConnector {
     fn exchange() -> Exchange;
 
     /// Build websocket subscription payloads, splitting the symbol list across multiple connections if needed.
-    async fn build_subscriptions(rest_url: &Url, max_subscription_per_ws: usize) -> Result<Vec<Self::SubscriptionPayload>, Box<dyn Error + Send + Sync>>;
+    async fn build_subscriptions(client: Client, rest_url: &Url, max_subscription_per_ws: usize) -> Result<Vec<Self::SubscriptionPayload>, Box<dyn Error + Send + Sync + 'static>>;
 
     /// (Re)create websocket streams and start listening for market data.
-    async fn subscribe_streams(&mut self) -> Result<(), Box<dyn Error + Send + Sync>>;
+    async fn subscribe_streams(&mut self) -> Result<(), Box<dyn Error + Send + Sync + 'static>>;
 
     /// Send a pong response for an inbound ping coming from a specific websocket.
-    async fn pong(&self, msg: PingMsg) -> Result<(), Box<dyn Error + Send + Sync>>;
+    async fn pong(&self, msg: PingMsg) -> Result<(), Box<dyn Error + Send + Sync + 'static>>;
 
     /// Run the connector event loop (typically until the inbound channel is closed).
     async fn start(&mut self);
 
     /// Fetch the list of symbols/instruments to subscribe to via REST.
-    async fn get_subscriptions_list(rest_url: &Url) -> Result<Vec<String>, Box<dyn Error + Send + Sync>>;
+    async fn get_subscriptions_list(client: Client, rest_url: &Url,) -> Result<Vec<String>, Box<dyn Error + Send + Sync + 'static>>;
 
     /// Backoff wrapper around `get_subscriptions_list`.
     ///
     /// Useful when the REST call can fail transiently or take too long due to unstable connectivity.
     /// Retries until success with an exponential backoff capped to the last value (60s).
     async fn get_subscriptions_list_backoff(
+        client: Client,
         rest_url: &Url
     ) -> Vec<String> {
         let backoff_secs = [1, 5, 15, 30, 60];
         let mut attempt: usize = 0;
     
         loop {
-            match Self::get_subscriptions_list(rest_url).await {
+            match Self::get_subscriptions_list(client.clone(), rest_url).await {
                 Ok(subscriptions) => {
                     return subscriptions;
                 }

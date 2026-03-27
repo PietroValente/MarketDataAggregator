@@ -25,13 +25,13 @@ enum ManagerCommand {
 }
 
 impl KrakenConnector {
-    pub async fn new(urls: KrakenUrls, max_subscription_per_ws: usize, raw_tx: Sender<KrakenMdMsg>, control_rx: Receiver<ControlEvent>) -> Result<Self, Box<dyn Error + Send + Sync>> 
+    pub async fn new(client:Client, urls: KrakenUrls, max_subscription_per_ws: usize, raw_tx: Sender<KrakenMdMsg>, control_rx: Receiver<ControlEvent>) -> Result<Self, Box<dyn Error + Send + Sync + 'static>> 
     where 
         Self: Sized
     {
         let (inbound_tx, inbound_rx) = channel::<InboundEvent>(4096);
         let ws_url = Arc::from(urls.ws);
-        let subscriptions_payloads = Arc::new(KrakenConnector::build_subscriptions(&urls.exchange_info, max_subscription_per_ws).await?);
+        let subscriptions_payloads = Arc::new(KrakenConnector::build_subscriptions(client, &urls.exchange_info, max_subscription_per_ws).await?);
 
         let (manager_tx, manager_rx) = channel::<ManagerCommand>(128);
 
@@ -63,11 +63,7 @@ impl ExchangeConnector for KrakenConnector {
         Exchange::Kraken
     }
 
-    async fn get_subscriptions_list(rest_url: &Url) -> Result<Vec<String>, Box<dyn Error + Send + Sync>> {
-        let client = Client::builder()
-                        .connect_timeout(Duration::from_secs(3))
-                        .timeout(Duration::from_secs(15))
-                        .build()?;
+    async fn get_subscriptions_list(client:Client, rest_url: &Url) -> Result<Vec<String>, Box<dyn Error + Send + Sync + 'static>> {
         let resp = client.get(rest_url.as_str())
                             .send().await?
                             .json::<ApiResponse>().await?;
@@ -80,8 +76,8 @@ impl ExchangeConnector for KrakenConnector {
         Ok(list)
     }
 
-    async fn build_subscriptions(rest_url: &Url, max_subscription_per_ws: usize) -> Result<Vec<Message>, Box<dyn Error + Send + Sync>>{
-        let mut list = KrakenConnector::get_subscriptions_list_backoff(rest_url).await;
+    async fn build_subscriptions(client:Client, rest_url: &Url, max_subscription_per_ws: usize) -> Result<Vec<Message>, Box<dyn Error + Send + Sync + 'static>>{
+        let mut list = KrakenConnector::get_subscriptions_list_backoff(client, rest_url).await;
         let subscriptions_payloads_len = (list.len()/max_subscription_per_ws) + 1;
         let mut result = Vec::new();
         for i in 0..subscriptions_payloads_len {
@@ -108,18 +104,18 @@ impl ExchangeConnector for KrakenConnector {
         Ok(result)
     }
 
-    async fn subscribe_streams(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
+    async fn subscribe_streams(&mut self) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
         self.manager_tx
             .send(ManagerCommand::RecreateWithSnapshots)
             .await
-            .map_err(|e| Box::new(e) as Box<dyn Error + Send + Sync>)
+            .map_err(|e| Box::new(e) as Box<dyn Error + Send + Sync + 'static>)
     }
 
-    async fn pong(&self, msg: PingMsg) -> Result<(), Box<dyn Error + Send + Sync>> {
+    async fn pong(&self, msg: PingMsg) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
         self.manager_tx
             .send(ManagerCommand::Pong(msg))
             .await
-            .map_err(|e| Box::new(e) as Box<dyn Error + Send + Sync>)
+            .map_err(|e| Box::new(e) as Box<dyn Error + Send + Sync + 'static>)
     }
 
     async fn start(&mut self) {
@@ -269,7 +265,7 @@ async fn recreate_with_snapshots(
     subscriptions_payloads: Arc<Vec<Message>>,
     inbound_tx: Sender<InboundEvent>,
     cmd_tx: Sender<ManagerCommand>,
-) -> Result<(), Box<dyn Error + Send + Sync>> {    
+) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {    
     for (i, message) in subscriptions_payloads.iter().enumerate() {
         let (writer_tx, writer_rx) = channel::<WriteCommand>(64);
         let (ws_stream, _) = connect_async(ws_url.as_str()).await?;

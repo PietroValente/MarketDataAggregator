@@ -23,11 +23,11 @@ impl BybitAdapter {
         }
     }
 
-    fn validate_snapshot(&mut self, _payload: &ParsedBookMessage) -> Result<(), Box<dyn Error + Send + Sync>> {
+    fn validate_snapshot(&mut self, _payload: &ParsedBookMessage) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
         Ok(())
     }
 
-    fn validate_update(&mut self, _payload: &ParsedBookMessage) -> Result<(), Box<dyn Error + Send + Sync>> {
+    fn validate_update(&mut self, _payload: &ParsedBookMessage) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
         Ok(())
     }
 
@@ -106,11 +106,11 @@ impl ExchangeAdapter for BybitAdapter {
         Exchange::Bybit
     }
 
-    fn validate_snapshot(&mut self, payload: &Self::SnapshotPayload) -> Result<(), Box<dyn Error + Send + Sync>> {
+    fn validate_snapshot(&mut self, payload: &Self::SnapshotPayload) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
         BybitAdapter::validate_snapshot(self, payload)
     }
 
-    fn validate_update(&mut self, payload: &Self::UpdatePayload) -> Result<(), Box<dyn Error + Send + Sync>> {
+    fn validate_update(&mut self, payload: &Self::UpdatePayload) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
         BybitAdapter::validate_update(self, payload)
     }
 

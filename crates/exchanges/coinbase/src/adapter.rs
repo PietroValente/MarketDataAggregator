@@ -23,11 +23,11 @@ impl CoinbaseAdapter {
         }
     }
 
-    fn validate_snapshot(&mut self, _payload: &ParsedBookSnapshot) -> Result<(), Box<dyn Error + Send + Sync>> {
+    fn validate_snapshot(&mut self, _payload: &ParsedBookSnapshot) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
         Ok(())
     }
 
-    fn validate_update(&mut self, _payload: &ParsedBookUpdate) -> Result<(), Box<dyn Error + Send + Sync>> {
+    fn validate_update(&mut self, _payload: &ParsedBookUpdate) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
         Ok(())
     }
 
@@ -112,11 +112,11 @@ impl ExchangeAdapter for CoinbaseAdapter {
         Exchange::Coinbase
     }
 
-    fn validate_snapshot(&mut self, payload: &Self::SnapshotPayload) -> Result<(), Box<dyn Error + Send + Sync>> {
+    fn validate_snapshot(&mut self, payload: &Self::SnapshotPayload) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
         CoinbaseAdapter::validate_snapshot(self, payload)
     }
 
-    fn validate_update(&mut self, payload: &Self::UpdatePayload) -> Result<(), Box<dyn Error + Send + Sync>> {
+    fn validate_update(&mut self, payload: &Self::UpdatePayload) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
         CoinbaseAdapter::validate_update(self, payload)
     }
 

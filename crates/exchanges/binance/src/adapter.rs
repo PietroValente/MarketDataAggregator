@@ -1,55 +1,133 @@
-use std::{collections::{hash_map::Entry, HashMap}, error::Error, time::{SystemTime, UNIX_EPOCH}};
+use std::{collections::HashMap, error::Error, mem, time::{SystemTime, UNIX_EPOCH}};
 
-use md_core::{adapter_trait::ExchangeAdapter, events::ControlEvent};
+use md_core::{adapter_trait::ExchangeAdapter, events::ControlEvent, types::ExchangeStatus};
 use md_core::{book::BookLevels, events::{BookEventType, EventEnvelope, NormalizedBookData, NormalizedEvent}, logging::types::Component, types::{Exchange, Instrument}};
 use tokio::sync::mpsc::{Receiver, Sender};
-use tracing::{error, info, warn};
+use tracing::{error, warn};
 
-use crate::types::{BinanceMdMsg, ParsedBookSnapshot, ParsedBookUpdate, WsMessage};
+use crate::types::{BinanceBookState, BinanceMdMsg, BinanceValidateSnapshot, BookSyncStatus, ParsedBookSnapshot, ParsedBookUpdate, ValidateUpdateError, WsMessage};
 
 pub struct BinanceAdapter {
+    raw_tx: Sender<BinanceMdMsg>,
     raw_rx: Receiver<BinanceMdMsg>,
     normalized_tx: Sender<EventEnvelope>,
-    symbols_pending_snapshot: HashMap<Instrument, Vec<EventEnvelope>>,
-    control_tx: Sender<ControlEvent>
+    control_tx: Sender<ControlEvent>,
+    book_states: HashMap<Instrument, BinanceBookState>,
+    live_books: usize
 }
 
 impl BinanceAdapter {
-    pub fn new(raw_rx: Receiver<BinanceMdMsg>, normalized_tx: Sender<EventEnvelope>, control_tx: Sender<ControlEvent>) -> Self {
+    pub fn new(raw_tx: Sender<BinanceMdMsg>, raw_rx: Receiver<BinanceMdMsg>, normalized_tx: Sender<EventEnvelope>, control_tx: Sender<ControlEvent>) -> Self {
         Self {
+            raw_tx,
             raw_rx,
             normalized_tx,
-            symbols_pending_snapshot: HashMap::new(),
-            control_tx
+            control_tx,
+            book_states: HashMap::new(),
+            live_books: 0
         }
     }
 
-    fn drain_buffered_updates(&mut self, i: Instrument) {
-        let Some(buffer_updates) = self.symbols_pending_snapshot.remove(&i) else {
-            error!(exchange = ?Exchange::Binance, component = ?Component::Adapter, symbol = ?i, "symbol live not found");
+    fn drain_buffered_updates(&mut self, instrument: Instrument) {
+        let Some(book) = self.book_states.get_mut(&instrument) else {
+            error!(exchange = ?Exchange::Binance, component = ?Component::Adapter, symbol = ?instrument, "symbol not found");
             return;
         };
-        for u in buffer_updates {
-            if let Err(e) = self.normalized_tx.blocking_send(u) {
-                error!(exchange = ?Exchange::Binance, component = ?Component::Adapter, error = ?e, "error while sending the update event");
-            }
+        if book.status != BookSyncStatus::WaitingSnapshot {
+            error!(exchange = ?Exchange::Binance, component = ?Component::Adapter, symbol = ?instrument, status = ?book.status, "book status different from WaitingSnapshot");
+            return;
         }
+        let updates = mem::take(&mut book.symbols_pending_snapshot);
+        let raw_tx = self.raw_tx.clone();
+        std::thread::spawn(move || {
+            for u in updates {
+                if let Err(e) = raw_tx.blocking_send(BinanceMdMsg::WsMessage(u)) {
+                    error!(
+                        exchange = ?Exchange::Binance,
+                        component = ?Component::Adapter,
+                        error = ?e,
+                        "error while sending the update event"
+                    );
+                }
+            }
+            if let Err(e) = raw_tx.blocking_send(BinanceMdMsg::Live(instrument)) {
+                error!(
+                    exchange = ?Exchange::Binance,
+                    component = ?Component::Adapter,
+                    error = ?e,
+                    "error while sending the update event"
+                );
+            }
+        });
     }
 
-    fn validate_snapshot(&mut self, _payload: &ParsedBookSnapshot) -> Result<(), Box<dyn Error + Send + Sync>> {
+    fn validate_snapshot(&mut self, payload: &BinanceValidateSnapshot) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
+        if let Some(book) = self.book_states.get_mut(&payload.symbol) {
+            book.last_applied_update_id = Some(payload.last_update_id);
+        }
         Ok(())
     }
 
-    fn validate_update(&mut self, _payload: &ParsedBookUpdate) -> Result<(), Box<dyn Error + Send + Sync>> {
+    fn validate_update(&mut self, payload: &ParsedBookUpdate) -> Result<(), ValidateUpdateError> {
+        if payload.event_type != "depthUpdate" {
+            return Err(ValidateUpdateError::UnknownType(payload.event_type.clone()));
+        }
+        let Some(book) = self.book_states.get_mut(&payload.symbol) else {
+                return Err(ValidateUpdateError::InstrumentNotFound { instrument: payload.symbol.clone() });
+        };
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+
+        let latency = now.saturating_sub(payload.event_time);
+
+        if latency > 1000 {
+            warn!(exchange = ?Exchange::Binance, component = ?Component::Adapter, symbol = ?payload.symbol, "high latency for update: {} ms", latency);
+        }
+
+        let Some(last_applied_update_id) = book.last_applied_update_id else {
+            return Err(ValidateUpdateError::MissingSnapshot);
+        };
+
+        if payload.final_update_id < last_applied_update_id {
+            return Err(ValidateUpdateError::StaleUpdate { event_last_update_id: payload.final_update_id, book_last_update_id: last_applied_update_id });
+        }
+        if payload.first_update_id > last_applied_update_id + 1 {
+            return Err(ValidateUpdateError::UpdateGap { event_first_update_id: payload.first_update_id, expected_next_update_id: last_applied_update_id + 1 });
+        }
+        book.last_applied_update_id = Some(payload.final_update_id);
+
         Ok(())
     }
 
     pub fn run(&mut self) {
         while let Some(msg) = self.raw_rx.blocking_recv() {
             match msg {
+                BinanceMdMsg::Live(instrument) => {
+                    let Some(book) = self.book_states.get_mut(&instrument) else {
+                        error!(exchange = ?Exchange::Binance, component = ?Component::Adapter, symbol = ?instrument, "symbol not found");
+                        continue;
+                    };
+                    if !book.symbols_pending_snapshot.is_empty() {
+                        self.drain_buffered_updates(instrument);
+                        continue;
+                    }
+                    book.status = BookSyncStatus::Live;
+                    self.live_books += 1;
+                    if self.live_books == self.book_states.len() {
+                        let event_envelope = EventEnvelope {
+                            exchange: Exchange::Binance,
+                            event: NormalizedEvent::ApplyStatus(ExchangeStatus::Running)
+                        };
+                        if let Err(e) = self.normalized_tx.blocking_send(event_envelope) {
+                            error!(exchange = ?Exchange::Binance, component = ?Component::Adapter, error = ?e, "error while sending running status event");
+                        }
+                    }
+                }
                 BinanceMdMsg::Instruments(list) => {
                     for i in list {
-                        self.symbols_pending_snapshot.insert(i, Vec::new());
+                        self.book_states.insert(i.clone(), BinanceBookState::new());
                     }
                 },
                 BinanceMdMsg::Snapshot(payload) => {
@@ -57,7 +135,10 @@ impl BinanceAdapter {
                         error!(exchange = ?Exchange::Binance, component = ?Component::Adapter, symbol = ?payload.symbol, text = ?String::from_utf8(payload.payload.clone()).unwrap(), "error while parsing snapshot");
                         continue;
                     };
-                    if let Err(e) = self.validate_snapshot(&parsed_snapshot) {
+                    if let Err(e) = self.validate_snapshot(&BinanceValidateSnapshot{
+                        symbol: payload.symbol.clone(),
+                        last_update_id: parsed_snapshot.last_update_id
+                    }) {
                         error!(exchange = ?Exchange::Binance, component = ?Component::Adapter, symbol = ?payload.symbol, error = ?e, "error while validating snapshot");
                         if let Err(e) = self.control_tx.blocking_send(ControlEvent::Resync) {
                             error!(exchange = ?Exchange::Binance, component = ?Component::Adapter, error = ?e, "error while sending resync");
@@ -94,25 +175,57 @@ impl BinanceAdapter {
                             error!(exchange = ?Exchange::Binance, component = ?Component::Adapter, text = ?text, "error while parsing update");
                         },
                         Ok(WsMessage::Update(update)) => {
-                            if let Err(e) = self.validate_update(&update) {
-                                error!(exchange = ?Exchange::Binance, component = ?Component::Adapter, symbol = ?update.symbol, error = ?e, "error while validating snapshot");
-                                if let Err(e) = self.control_tx.blocking_send(ControlEvent::Resync) {
-                                    error!(exchange = ?Exchange::Binance, component = ?Component::Adapter, error = ?e, "error while sending resync");
-                                }
-                            }
-                            if update.event_type != "depthUpdate" {
-                                error!(exchange = ?Exchange::Binance, component = ?Component::Adapter, symbol = ?update.symbol, "unknown type of event: {}", update.event_type);
+                            let Some(book) = self.book_states.get_mut(&update.symbol) else {
+                                error!(exchange = ?Exchange::Binance, component = ?Component::Adapter, symbol = ?update.symbol, "symbol not found");
                                 continue;
-                            }
-                            let now = SystemTime::now()
-                                .duration_since(UNIX_EPOCH)
-                                .unwrap()
-                                .as_millis() as u64;
-        
-                            let latency = now.saturating_sub(update.event_time);
-        
-                            if latency > 1000 {
-                                warn!(exchange = ?Exchange::Binance, component = ?Component::Adapter, symbol = ?update.symbol, "high latency for update: {} ms", latency);
+                            };
+                            match book.status {
+                                BookSyncStatus::Live => {},
+                                BookSyncStatus::WaitingSnapshot => {
+                                    book.symbols_pending_snapshot.push(payload);
+                                    continue;
+                                }
+                            };
+
+                            //process the update
+                            match self.validate_update(&update) {
+                                Err(e @ ValidateUpdateError::UpdateGap {
+                                    event_first_update_id,
+                                    expected_next_update_id,
+                                }) => {
+                                    error!(
+                                        exchange = ?Exchange::Binance,
+                                        component = ?Component::Adapter,
+                                        symbol = ?update.symbol,
+                                        error = ?e,
+                                        event_first_update_id = event_first_update_id,
+                                        expected_next_update_id = expected_next_update_id,
+                                        "error while validating update"
+                                    );
+                                    
+                                    self.book_states.clear();
+                                    
+                                    if let Err(e) = self.control_tx.blocking_send(ControlEvent::Resync) {
+                                        error!(
+                                            exchange = ?Exchange::Binance,
+                                            component = ?Component::Adapter,
+                                            error = ?e,
+                                            "error while sending resync"
+                                        );
+                                    }
+                                    continue;
+                                },
+                                Err(e) => {
+                                    error!(
+                                        exchange = ?Exchange::Binance,
+                                        component = ?Component::Adapter,
+                                        symbol = ?update.symbol,
+                                        error = ?e,
+                                        "error while validating update"
+                                    );
+                                    continue;
+                                },
+                                Ok(()) => {}
                             }
         
                             let book_update = BookLevels {
@@ -129,16 +242,8 @@ impl BinanceAdapter {
                                 event: update_event
                             };
                             
-                            match self.symbols_pending_snapshot.entry(update.symbol.clone()) {
-                                Entry::Occupied(mut e) => {
-                                    info!(exchange = ?Exchange::Binance, component = ?Component::Adapter, symbol = ?update.symbol, "buffering symbol not live");
-                                    e.get_mut().push(event_envelope);
-                                }
-                                Entry::Vacant(_) => {
-                                    if let Err(e) = self.normalized_tx.blocking_send(event_envelope) {
-                                        error!(exchange = ?Exchange::Binance, component = ?Component::Adapter, error = ?e, "error while sending update event");
-                                    }
-                                }
+                            if let Err(e) = self.normalized_tx.blocking_send(event_envelope) {
+                                error!(exchange = ?Exchange::Binance, component = ?Component::Adapter, error = ?e, "error while sending update event");
                             }
                         },
                     }
@@ -149,19 +254,19 @@ impl BinanceAdapter {
 }
 
 impl ExchangeAdapter for BinanceAdapter {
-    type SnapshotPayload = ParsedBookSnapshot;
+    type SnapshotPayload = BinanceValidateSnapshot;
     type UpdatePayload = ParsedBookUpdate;
 
     fn exchange(&self) -> Exchange {
         Exchange::Binance
     }
 
-    fn validate_snapshot(&mut self, payload: &Self::SnapshotPayload) -> Result<(), Box<dyn Error + Send + Sync>> {
+    fn validate_snapshot(&mut self, payload: &Self::SnapshotPayload) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
         BinanceAdapter::validate_snapshot(self, payload)
     }
 
-    fn validate_update(&mut self, payload: &Self::UpdatePayload) -> Result<(), Box<dyn Error + Send + Sync>> {
-        BinanceAdapter::validate_update(self, payload)
+    fn validate_update(&mut self, payload: &Self::UpdatePayload) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
+        BinanceAdapter::validate_update(self, payload).map_err(|e| Box::new(e) as Box<dyn Error + Send + Sync + 'static>)
     }
 
     fn run(&mut self) {

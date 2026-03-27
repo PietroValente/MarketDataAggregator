@@ -1,4 +1,4 @@
-use std::thread;
+use std::{thread, time::Duration};
 use binance::{connector::BinanceConnector, adapter::BinanceAdapter, types::{BinanceMdMsg, BinanceUrls}};
 use bitget::{connector::BitgetConnector, adapter::BitgetAdapter, types::{BitgetMdMsg, BitgetUrls}};
 use bybit::{connector::BybitConnector, adapter::BybitAdapter, types::{BybitMdMsg, BybitUrls}};
@@ -7,6 +7,7 @@ use engine::Engine;
 use kraken::{adapter::KrakenAdapter, connector::KrakenConnector, types::{KrakenMdMsg, KrakenUrls}};
 use okx::{connector::OkxConnector, adapter::OkxAdapter, types::{OkxMdMsg, OkxUrls}};
 use query::query_manager::QueryManager;
+use reqwest::Client;
 use tokio::sync::mpsc::channel;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use md_core::{connector_trait::ExchangeConnector, events::{ControlEvent, EventEnvelope}, logging::{layer::DbLoggingLayer, writer::DbLoggingWriter}, types::Exchange};
@@ -27,22 +28,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with(log_layer)
         .init();
 
-        let _ = tokio::spawn(async move {
-            let mut log_writer =  match DbLoggingWriter::new(&config.scylladb.uri, &config.scylladb.init_path, log_rx).await {
-                Ok(writer) => {writer},
-                Err(e) => {
-                    eprintln!("Logging disabled: failed to initialize DB writer");
-                    eprintln!("Error: {:?}", e);
-                    eprintln!("-------------------------------------");
-                    return;
-                }
-            };
-            tokio::spawn(async move {
-                if let Err(e) = log_writer.start().await {
-                    eprintln!("Error while running the log writer: {:?}", e);
-                }
-            });
-        }).await;
+    let _ = tokio::spawn(async move {
+        let mut log_writer =  match DbLoggingWriter::new(&config.scylladb.uri, &config.scylladb.init_path, log_rx).await {
+            Ok(writer) => {writer},
+            Err(e) => {
+                eprintln!("Logging disabled: failed to initialize DB writer");
+                eprintln!("Error: {:?}", e);
+                eprintln!("-------------------------------------");
+                return;
+            }
+        };
+        tokio::spawn(async move {
+            if let Err(e) = log_writer.start().await {
+                eprintln!("Error while running the log writer: {:?}", e);
+            }
+        });
+    }).await;
 
     /* CONTROL CHANNELS */
     let (binance_control_tx, binance_control_rx) = channel::<ControlEvent>(config.channels.control_buffer);
@@ -75,7 +76,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (kraken_raw_tx, kraken_raw_rx) = channel::<KrakenMdMsg>(config.channels.raw_buffer);
     let (okx_raw_tx, okx_raw_rx) = channel::<OkxMdMsg>(config.channels.raw_buffer);
 
-    let mut binance_adapter = BinanceAdapter::new(binance_raw_rx, normalized_tx.clone(), binance_control_tx);
+    let mut binance_adapter = BinanceAdapter::new(binance_raw_tx.clone(), binance_raw_rx, normalized_tx.clone(), binance_control_tx);
     let mut bitget_adapter = BitgetAdapter::new(bitget_raw_rx, normalized_tx.clone(), bitget_control_tx);
     let mut bybit_adapter = BybitAdapter::new(bybit_raw_rx, normalized_tx.clone(), bybit_control_tx);
     let mut coinbase_adapter = CoinbaseAdapter::new(coinbase_raw_rx, normalized_tx.clone(), coinbase_control_tx);
@@ -102,6 +103,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
     
     /* CONNECTORS */
+    let client = Client::builder()
+                        .connect_timeout(Duration::from_secs(8))
+                        .timeout(Duration::from_secs(20))
+                        .build()?;
+    let binance_client = client.clone();
+    let bitget_client = client.clone();
+    let bybit_client = client.clone();
+    let coinbase_client = client.clone();
+    let kraken_client = client.clone();
+    let okx_client = client.clone();
+
     let binance_urls = BinanceUrls { 
         exchange_info: Url::parse(&config.binance.exchange_info)?,
         snapshot: Url::parse(&config.binance.snapshot)?, 
@@ -129,27 +141,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     
     tokio::spawn(async move {
-        let mut binance_connector = BinanceConnector::new(binance_urls, config.binance.max_subscription_per_ws, binance_raw_tx, binance_control_rx).await.unwrap();
+        let mut binance_connector = BinanceConnector::new(binance_client, binance_urls, config.binance.max_subscription_per_ws, binance_raw_tx, binance_control_rx).await.unwrap();
         binance_connector.start().await;
     });
     tokio::spawn(async move {
-        let mut bitget_connector  = BitgetConnector::new(bitget_urls, config.bitget.max_subscription_per_ws, bitget_raw_tx, bitget_control_rx).await.unwrap();
+        let mut bitget_connector  = BitgetConnector::new(bitget_client, bitget_urls, config.bitget.max_subscription_per_ws, bitget_raw_tx, bitget_control_rx).await.unwrap();
         bitget_connector.start().await;
     });
     tokio::spawn(async move {
-        let mut bybit_connector = BybitConnector::new(bybit_urls, config.bybit.max_subscription_per_ws, bybit_raw_tx, bybit_control_rx).await.unwrap();
+        let mut bybit_connector = BybitConnector::new(bybit_client, bybit_urls, config.bybit.max_subscription_per_ws, bybit_raw_tx, bybit_control_rx).await.unwrap();
         bybit_connector.start().await;
     });
     tokio::spawn(async move {
-        let mut coinbase_connector = CoinbaseConnector::new(coinbase_urls, config.coinbase.max_subscription_per_ws, coinbase_raw_tx, coinbase_control_rx).await.unwrap();
+        let mut coinbase_connector = CoinbaseConnector::new(coinbase_client, coinbase_urls, config.coinbase.max_subscription_per_ws, coinbase_raw_tx, coinbase_control_rx).await.unwrap();
         coinbase_connector.start().await;
     });
     tokio::spawn(async move {
-        let mut kraken_connector = KrakenConnector::new(kraken_urls, config.kraken.max_subscription_per_ws, kraken_raw_tx, kraken_control_rx).await.unwrap();
+        let mut kraken_connector = KrakenConnector::new(kraken_client, kraken_urls, config.kraken.max_subscription_per_ws, kraken_raw_tx, kraken_control_rx).await.unwrap();
         kraken_connector.start().await;
     });
     tokio::spawn(async move {
-        let mut okx_connector = OkxConnector::new(okx_urls, config.okx.max_subscription_per_ws, okx_raw_tx, okx_control_rx).await.unwrap();
+        let mut okx_connector = OkxConnector::new(okx_client, okx_urls, config.okx.max_subscription_per_ws, okx_raw_tx, okx_control_rx).await.unwrap();
         okx_connector.start().await;
     });
 

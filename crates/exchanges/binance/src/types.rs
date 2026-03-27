@@ -1,9 +1,32 @@
 use md_core::types::{Instrument, Price, Qty, RawMdMsg};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Deserializer, Serialize};
+use thiserror::Error;
 use tokio_tungstenite::tungstenite::Message;
 use url::Url;
 use std::str::FromStr;
+
+#[derive(Debug, PartialEq)]
+pub enum BookSyncStatus {
+    WaitingSnapshot,
+    Live
+}
+
+pub struct BinanceBookState {
+    pub status: BookSyncStatus,
+    pub last_applied_update_id: Option<u64>,
+    pub symbols_pending_snapshot: Vec<RawMdMsg>
+}
+
+impl BinanceBookState {
+    pub fn new() -> Self {
+        Self {
+            status: BookSyncStatus::WaitingSnapshot,
+            last_applied_update_id: None,
+            symbols_pending_snapshot: Vec::new()
+        }
+    }
+}
 
 #[derive(Deserialize)]
 pub struct ApiResponse {
@@ -38,6 +61,7 @@ pub enum BinanceMdMsg {
     Instruments(Vec<Instrument>),
     Snapshot(BinanceSnapshotMsg),
     WsMessage(RawMdMsg),
+    Live(Instrument)
 }
 
 #[derive(Clone)]
@@ -63,6 +87,37 @@ pub enum WsMessage {
 pub struct SubscriptionConfirmation {
     pub result: Option<serde_json::Value>,
     pub id: u64,
+}
+
+pub struct BinanceValidateSnapshot {
+    pub symbol: Instrument,
+    pub last_update_id: u64
+}
+
+#[derive(Error, Debug)]
+pub enum ValidateUpdateError {
+    #[error("Instrument not found: {instrument}")]
+    InstrumentNotFound {
+        instrument: Instrument,
+    },
+
+    #[error("Unknown type of event: {0}")]
+    UnknownType(String),
+
+    #[error("Stale update: event last_update_id={event_last_update_id} < book last_applied_update_id={book_last_update_id}")]
+    StaleUpdate {
+        event_last_update_id: u64,
+        book_last_update_id: u64,
+    },
+
+    #[error("Update gap detected: event first_update_id={event_first_update_id} > expected={expected_next_update_id}")]
+    UpdateGap {
+        event_first_update_id: u64,
+        expected_next_update_id: u64,
+    },
+
+    #[error("Cannot apply update: last_applied_update_id is None (book not initialized with snapshot)")]
+    MissingSnapshot
 }
 
 #[derive(Debug, Deserialize)]

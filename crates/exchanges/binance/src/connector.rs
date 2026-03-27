@@ -24,14 +24,14 @@ enum ManagerCommand {
 }
 
 impl BinanceConnector {
-    pub async fn new(urls: BinanceUrls, max_subscription_per_ws: usize, raw_tx: Sender<BinanceMdMsg>, control_rx: Receiver<ControlEvent>) -> Result<Self, Box<dyn Error + Send + Sync>> 
+    pub async fn new(client:Client, urls: BinanceUrls, max_subscription_per_ws: usize, raw_tx: Sender<BinanceMdMsg>, control_rx: Receiver<ControlEvent>) -> Result<Self, Box<dyn Error + Send + Sync + 'static>> 
     where 
         Self: Sized
     {
         let (inbound_tx, inbound_rx) = channel::<InboundEvent>(4096);
         let snapshot_url = Arc::from(urls.snapshot);
         let ws_url = Arc::from(urls.ws);
-        let subscriptions_payloads = Arc::new(BinanceConnector::build_subscriptions(&urls.exchange_info, max_subscription_per_ws).await?);
+        let subscriptions_payloads = Arc::new(BinanceConnector::build_subscriptions(client, &urls.exchange_info, max_subscription_per_ws).await?);
 
         let (manager_tx, manager_rx) = channel::<ManagerCommand>(128);
 
@@ -53,7 +53,7 @@ impl BinanceConnector {
         Ok(Self {
             raw_tx,
             inbound_rx,
-            manager_tx,
+            manager_tx
         })
     }
 }
@@ -65,14 +65,17 @@ impl ExchangeConnector for BinanceConnector {
         Exchange::Binance
     }
 
-    async fn get_subscriptions_list(rest_url: &Url) -> Result<Vec<String>, Box<dyn Error + Send + Sync>> {
-        let client = Client::builder()
-                        .connect_timeout(Duration::from_secs(3))
-                        .timeout(Duration::from_secs(30))
-                        .build()?;
-        let resp = client.get(rest_url.as_str())
-                            .send().await?
-                            .json::<ApiResponse>().await?;
+    async fn get_subscriptions_list(client: Client, rest_url: &Url) -> Result<Vec<String>, Box<dyn Error + Send + Sync + 'static>> {     
+        let resp = client
+            .get(rest_url.as_str())
+            .timeout(Duration::from_secs(60))
+            .send()
+            .await?
+            .error_for_status()?;
+
+        let body = resp.bytes().await?;
+
+        let resp: ApiResponse = serde_json::from_slice(&body)?;
         let mut list = Vec::new();
         for symbol in resp.symbols {
             if symbol.status == "TRADING" {
@@ -82,8 +85,8 @@ impl ExchangeConnector for BinanceConnector {
         Ok(list)
     }
 
-    async fn build_subscriptions(rest_url: &Url, max_subscription_per_ws: usize) -> Result<Vec<BinanceSubscriptionMsg>, Box<dyn Error + Send + Sync>>{
-        let mut list = BinanceConnector::get_subscriptions_list_backoff(rest_url).await;
+    async fn build_subscriptions(client: Client, rest_url: &Url, max_subscription_per_ws: usize) -> Result<Vec<BinanceSubscriptionMsg>, Box<dyn Error + Send + Sync + 'static>>{
+        let mut list = BinanceConnector::get_subscriptions_list_backoff(client, rest_url).await;
         let subscriptions_payloads_len = (list.len()/max_subscription_per_ws) + 1;
         let mut result = Vec::new();
         let update_settings = "@depth@100ms";
@@ -124,18 +127,18 @@ impl ExchangeConnector for BinanceConnector {
         Ok(result)
     }
 
-    async fn subscribe_streams(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
+    async fn subscribe_streams(&mut self) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
         self.manager_tx
             .send(ManagerCommand::RecreateWithSnapshots)
             .await
-            .map_err(|e| Box::new(e) as Box<dyn Error + Send + Sync>)
+            .map_err(|e| Box::new(e) as Box<dyn Error + Send + Sync + 'static>)
     }
 
-    async fn pong(&self, msg: PingMsg) -> Result<(), Box<dyn Error + Send + Sync>> {
+    async fn pong(&self, msg: PingMsg) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
         self.manager_tx
             .send(ManagerCommand::Pong(msg))
             .await
-            .map_err(|e| Box::new(e) as Box<dyn Error + Send + Sync>)
+            .map_err(|e| Box::new(e) as Box<dyn Error + Send + Sync + 'static>)
     }
 
     async fn start(&mut self) {
@@ -295,7 +298,7 @@ async fn recreate_with_snapshots(
     inbound_tx: Sender<InboundEvent>,
     raw_tx: Sender<BinanceMdMsg>,
     cmd_tx: Sender<ManagerCommand>,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
+) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
     for (i, message) in subscriptions_payloads.iter().enumerate() {
         let (writer_tx, writer_rx) = channel::<WriteCommand>(64);
         let (ws_stream, _) = connect_async(ws_url.as_str()).await?;
@@ -334,7 +337,7 @@ async fn recreate_with_snapshots(
         let symbols = message.symbols.clone();
 
         stream::iter(symbols)
-            .map(Ok::<_, Box<dyn Error + Send + Sync>>)
+            .map(Ok::<_, Box<dyn Error + Send + Sync + 'static>>)
             .try_for_each_concurrent(10, move |symbol| {
                 let client = client.clone();
                 let raw_tx = raw_tx_snap.clone();
