@@ -109,12 +109,10 @@ impl BinanceAdapter {
                         error!(exchange = ?Exchange::Binance, component = ?Component::Adapter, symbol = ?instrument, "symbol not found");
                         continue;
                     };
-                    if !book.symbols_pending_snapshot.is_empty() {
-                        self.drain_buffered_updates(instrument);
-                        continue;
-                    }
+
                     book.status = BookSyncStatus::Live;
                     self.live_books += 1;
+                    
                     if self.live_books == self.book_states.len() {
                         let event_envelope = EventEnvelope {
                             exchange: Exchange::Binance,
@@ -128,6 +126,13 @@ impl BinanceAdapter {
                 BinanceMdMsg::Instruments(list) => {
                     for i in list {
                         self.book_states.insert(i.clone(), BinanceBookState::new());
+                    }
+                    let event_envelope = EventEnvelope {
+                        exchange: Exchange::Binance,
+                        event: NormalizedEvent::ApplyStatus(ExchangeStatus::Initializing)
+                    };
+                    if let Err(e) = self.normalized_tx.blocking_send(event_envelope) {
+                        error!(exchange = ?Exchange::Binance, component = ?Component::Adapter, error = ?e, "error while sending running status event");
                     }
                 },
                 BinanceMdMsg::Snapshot(payload) => {
@@ -204,6 +209,7 @@ impl BinanceAdapter {
                                     );
                                     
                                     self.book_states.clear();
+                                    self.live_books = 0;
                                     
                                     if let Err(e) = self.control_tx.blocking_send(ControlEvent::Resync) {
                                         error!(
