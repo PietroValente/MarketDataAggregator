@@ -45,6 +45,7 @@ where
             message: visitor.message,
             target: metadata.target(),
             location,
+            fields: visitor.fields.clone(),
         };
 
         let log = match (visitor.component, visitor.exchange, visitor.instrument) {

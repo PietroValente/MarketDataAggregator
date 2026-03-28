@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS generic_logs (
     message text,
     target text,
     location text,
+    fields map<text, text>,
     PRIMARY KEY ((level), ts)
 ) WITH CLUSTERING ORDER BY (ts DESC)
   AND default_time_to_live = 21600;
@@ -24,6 +25,7 @@ CREATE TABLE IF NOT EXISTS component_exchange_logs (
     message text,
     target text,
     location text,
+    fields map<text, text>,
     PRIMARY KEY ((level, component, exchange), ts)
 ) WITH CLUSTERING ORDER BY (ts DESC)
   AND default_time_to_live = 21600;
@@ -37,6 +39,7 @@ CREATE TABLE IF NOT EXISTS instrument_logs (
     message text,
     target text,
     location text,
+    fields map<text, text>,
     PRIMARY KEY ((exchange, instrument), ts)
 ) WITH CLUSTERING ORDER BY (ts DESC)
   AND default_time_to_live = 21600;

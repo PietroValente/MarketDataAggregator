@@ -7,31 +7,32 @@ use super::types::LogEvent;
 
 pub struct DbLoggingWriter {
     receiver: Receiver<LogEvent>,
-    session: Session
+    session: Session,
 }
 
 impl DbLoggingWriter {
-    pub async fn new(uri: &str, init_path: &str, receiver: Receiver<LogEvent>) -> Result<Self, Box<dyn Error>> {
+    pub async fn new(
+        uri: &str,
+        init_path: &str,
+        receiver: Receiver<LogEvent>,
+    ) -> Result<Self, Box<dyn Error>> {
         let init = fs::read_to_string(init_path)?;
         let session = SessionBuilder::new()
-        .known_node(uri)
-        .build()
-        .await?;
+            .known_node(uri)
+            .build()
+            .await?;
 
         for stmt in init.split(';') {
             let stmt = stmt.trim();
-    
+
             if stmt.is_empty() {
                 continue;
             }
-    
+
             session.query_unpaged(stmt, &[]).await?;
         }
 
-        Ok(Self {
-            receiver,
-            session
-        })
+        Ok(Self { receiver, session })
     }
 
     pub async fn start(&mut self) -> Result<(), Box<dyn Error>> {
@@ -39,23 +40,24 @@ impl DbLoggingWriter {
             match log_event {
                 LogEvent::Instrument(instrument_log) => {
                     let component_exchange = instrument_log.component_exchange;
-            
+
                     let level = component_exchange.generic.level.to_string();
                     let ts = component_exchange.generic.timestamp;
                     let target = component_exchange.generic.target.to_string();
-            
+
                     let location = component_exchange
                         .generic
                         .location
                         .map(|location| format!("{}:{}", location.file, location.line))
                         .unwrap_or_default();
-            
+
                     let message = component_exchange.generic.message.unwrap_or_default();
-            
+                    let fields = component_exchange.generic.fields;
+
                     let component = component_exchange.component;
                     let exchange = component_exchange.exchange;
                     let instrument = instrument_log.instrument;
-            
+
                     let instrument_row = (
                         level.clone(),
                         instrument,
@@ -65,8 +67,9 @@ impl DbLoggingWriter {
                         message.clone(),
                         target.clone(),
                         location.clone(),
+                        fields.clone(),
                     );
-            
+
                     let component_exchange_row = (
                         level,
                         component,
@@ -75,8 +78,9 @@ impl DbLoggingWriter {
                         message,
                         target,
                         location,
+                        fields,
                     );
-            
+
                     self.session
                         .query_unpaged(
                             "INSERT INTO instrument_logs (
@@ -87,12 +91,13 @@ impl DbLoggingWriter {
                                 ts,
                                 message,
                                 target,
-                                location
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                                location,
+                                fields
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                             instrument_row,
                         )
                         .await?;
-            
+
                     self.session
                         .query_unpaged(
                             "INSERT INTO component_exchange_logs (
@@ -102,26 +107,28 @@ impl DbLoggingWriter {
                                 ts,
                                 message,
                                 target,
-                                location
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                                location,
+                                fields
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                             component_exchange_row,
                         )
                         .await?;
                 }
-            
+
                 LogEvent::ComponentExchange(component_exchange_log) => {
                     let level = component_exchange_log.generic.level.to_string();
                     let ts = component_exchange_log.generic.timestamp;
                     let target = component_exchange_log.generic.target.to_string();
-            
+
                     let location = component_exchange_log
                         .generic
                         .location
                         .map(|location| format!("{}:{}", location.file, location.line))
                         .unwrap_or_default();
-            
+
                     let message = component_exchange_log.generic.message.unwrap_or_default();
-            
+                    let fields = component_exchange_log.generic.fields;
+
                     let component_exchange_row = (
                         level,
                         component_exchange_log.component,
@@ -130,8 +137,9 @@ impl DbLoggingWriter {
                         message,
                         target,
                         location,
+                        fields,
                     );
-            
+
                     self.session
                         .query_unpaged(
                             "INSERT INTO component_exchange_logs (
@@ -141,33 +149,36 @@ impl DbLoggingWriter {
                                 ts,
                                 message,
                                 target,
-                                location
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                                location,
+                                fields
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                             component_exchange_row,
                         )
                         .await?;
                 }
-            
+
                 LogEvent::Generic(generic_log) => {
                     let level = generic_log.level.to_string();
                     let ts = generic_log.timestamp;
                     let target = generic_log.target.to_string();
-            
+
                     let location = generic_log
                         .location
                         .map(|location| format!("{}:{}", location.file, location.line))
                         .unwrap_or_default();
-            
+
                     let message = generic_log.message.unwrap_or_default();
-            
+                    let fields = generic_log.fields;
+
                     let generic_row = (
                         level,
                         ts,
                         message,
                         target,
                         location,
+                        fields,
                     );
-            
+
                     self.session
                         .query_unpaged(
                             "INSERT INTO generic_logs (
@@ -175,8 +186,9 @@ impl DbLoggingWriter {
                                 ts,
                                 message,
                                 target,
-                                location
-                            ) VALUES (?, ?, ?, ?, ?)",
+                                location,
+                                fields
+                            ) VALUES (?, ?, ?, ?, ?, ?)",
                             generic_row,
                         )
                         .await?;
