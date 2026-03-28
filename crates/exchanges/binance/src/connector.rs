@@ -1,5 +1,5 @@
 use std::{collections::HashMap, error::Error, sync::Arc};
-
+use bytes::BytesMut;
 use futures_util::{stream, StreamExt, TryStreamExt};
 use md_core::{connector_trait::{ConnectionTasks, ExchangeConnector, WriteCommand}, events::{ControlEvent, InboundEvent, PingMsg}, logging::types::Component, types::{Exchange, Instrument, RawMdMsg}};
 use reqwest::Client;
@@ -32,6 +32,10 @@ impl BinanceConnector {
         let snapshot_url = Arc::from(urls.snapshot);
         let ws_url = Arc::from(urls.ws);
         let subscriptions_payloads = Arc::new(BinanceConnector::build_subscriptions(client, &urls.exchange_info, max_subscription_per_ws).await?);
+        let total_instruments = Arc::from(subscriptions_payloads
+                                                    .iter()
+                                                    .flat_map(|s| s.symbols.iter().cloned())
+                                                    .collect::<Vec<Instrument>>());
 
         let (manager_tx, manager_rx) = channel::<ManagerCommand>(128);
 
@@ -39,6 +43,7 @@ impl BinanceConnector {
             ws_url.clone(),
             snapshot_url,
             subscriptions_payloads,
+            total_instruments,
             inbound_tx,
             raw_tx.clone(),
             manager_tx.clone(),
@@ -73,7 +78,13 @@ impl ExchangeConnector for BinanceConnector {
             .await?
             .error_for_status()?;
 
-        let body = resp.bytes().await?;
+        let mut stream = resp.bytes_stream();
+        let mut body = BytesMut::new();
+
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk?;
+            body.extend_from_slice(&chunk);
+        }
 
         let resp: ApiResponse = serde_json::from_slice(&body)?;
         let mut list = Vec::new();
@@ -191,6 +202,7 @@ async fn connection_manager_task(
     ws_url: Arc<Url>,
     snapshot_url: Arc<Url>,
     subscriptions_payloads: Arc<Vec<BinanceSubscriptionMsg>>,
+    total_instruments: Arc<Vec<Instrument>>,
     inbound_tx: Sender<InboundEvent>,
     raw_tx: Sender<BinanceMdMsg>,
     cmd_tx: Sender<ManagerCommand>,
@@ -223,6 +235,7 @@ async fn connection_manager_task(
                     ws_url.clone(),
                     snapshot_url.clone(),
                     subscriptions_payloads.clone(),
+                    total_instruments.clone(),
                     inbound_tx.clone(),
                     raw_tx.clone(),
                     cmd_tx.clone()
@@ -257,6 +270,7 @@ async fn recreate_with_snapshots_backoff(
     ws_url: Arc<Url>,
     snapshot_url: Arc<Url>,
     subscriptions_payloads: Arc<Vec<BinanceSubscriptionMsg>>,
+    total_instruments: Arc<Vec<Instrument>>,
     inbound_tx: Sender<InboundEvent>,
     raw_tx: Sender<BinanceMdMsg>,
     cmd_tx: Sender<ManagerCommand>,
@@ -269,6 +283,7 @@ async fn recreate_with_snapshots_backoff(
             ws_url.clone(),
             snapshot_url.clone(),
             subscriptions_payloads.clone(),
+            total_instruments.clone(),
             inbound_tx.clone(),
             raw_tx.clone(),
             cmd_tx.clone()
@@ -295,10 +310,14 @@ async fn recreate_with_snapshots(
     ws_url: Arc<Url>,
     snapshot_url: Arc<Url>,
     subscriptions_payloads: Arc<Vec<BinanceSubscriptionMsg>>,
+    total_instruments: Arc<Vec<Instrument>>,
     inbound_tx: Sender<InboundEvent>,
     raw_tx: Sender<BinanceMdMsg>,
-    cmd_tx: Sender<ManagerCommand>,
+    cmd_tx: Sender<ManagerCommand>
 ) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
+    raw_tx
+        .send(BinanceMdMsg::Instruments(total_instruments.clone()))
+        .await?;
     for (i, message) in subscriptions_payloads.iter().enumerate() {
         let (writer_tx, writer_rx) = channel::<WriteCommand>(64);
         let (ws_stream, _) = connect_async(ws_url.as_str()).await?;
@@ -306,10 +325,6 @@ async fn recreate_with_snapshots(
 
         let reader_url = ws_url.clone();
         let writer_url = ws_url.clone();
-
-        raw_tx
-            .send(BinanceMdMsg::Instruments(message.symbols.clone()))
-            .await?;
 
         let reader_tx_clone = inbound_tx.clone();
         let ws_id = i as u8;

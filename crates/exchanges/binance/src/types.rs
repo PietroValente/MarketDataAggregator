@@ -4,7 +4,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use thiserror::Error;
 use tokio_tungstenite::tungstenite::Message;
 use url::Url;
-use std::str::FromStr;
+use std::{str::FromStr, sync::Arc};
 
 #[derive(Debug, PartialEq)]
 pub enum BookSyncStatus {
@@ -58,10 +58,9 @@ pub struct BinanceSnapshotMsg {
 }
 
 pub enum BinanceMdMsg {
-    Instruments(Vec<Instrument>),
+    Instruments(Arc<Vec<Instrument>>),
     Snapshot(BinanceSnapshotMsg),
-    WsMessage(RawMdMsg),
-    Live(Instrument)
+    WsMessage(RawMdMsg)
 }
 
 #[derive(Clone)]
