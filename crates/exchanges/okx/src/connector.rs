@@ -1,5 +1,6 @@
 use std::{collections::HashMap, error::Error, sync::Arc};
 
+use bytes::BytesMut;
 use futures_util::StreamExt;
 use md_core::{connector_trait::{ConnectionTasks, ExchangeConnector, WriteCommand}, events::{ControlEvent, InboundEvent, PingMsg}, logging::types::Component, types::Exchange};
 use reqwest::Client;
@@ -64,9 +65,21 @@ impl ExchangeConnector for OkxConnector {
     }
 
     async fn get_subscriptions_list(client:Client, rest_url: &Url) -> Result<Vec<String>, Box<dyn Error + Send + Sync + 'static>> {
-        let resp = client.get(rest_url.as_str())
-                            .send().await?
-                            .json::<ApiResponse>().await?;
+        let resp = client
+            .get(rest_url.as_str())
+            .send()
+            .await?
+            .error_for_status()?;
+
+        let mut stream = resp.bytes_stream();
+        let mut body = BytesMut::new();
+
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk?;
+            body.extend_from_slice(&chunk);
+        }
+
+        let resp: ApiResponse = serde_json::from_slice(&body)?;
         let mut list = Vec::new();
         for symbol in resp.data {
             if symbol.state == "live" {
