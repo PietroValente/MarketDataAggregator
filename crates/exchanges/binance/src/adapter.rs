@@ -5,19 +5,19 @@ use md_core::{book::BookLevels, events::{BookEventType, EventEnvelope, Normalize
 use tokio::sync::mpsc::{Receiver, Sender};
 use tracing::{error, warn};
 
-use crate::types::{BinanceBookState, BinanceMdMsg, BinanceValidateSnapshot, BookSyncStatus, ParsedBookSnapshot, ParsedBookUpdate, ValidateUpdateError, WsMessage};
+use crate::types::{BookState, MdMsg, ValidateSnapshot, BookSyncStatus, ParsedBookSnapshot, ParsedBookUpdate, ValidateUpdateError, WsMessage};
 
 pub struct BinanceAdapter {
-    raw_tx: Sender<BinanceMdMsg>,
-    raw_rx: Receiver<BinanceMdMsg>,
+    raw_tx: Sender<MdMsg>,
+    raw_rx: Receiver<MdMsg>,
     normalized_tx: Sender<EventEnvelope>,
     control_tx: Sender<ControlEvent>,
-    book_states: HashMap<Instrument, BinanceBookState>,
+    book_states: HashMap<Instrument, BookState>,
     live_books: usize
 }
 
 impl BinanceAdapter {
-    pub fn new(raw_tx: Sender<BinanceMdMsg>, raw_rx: Receiver<BinanceMdMsg>, normalized_tx: Sender<EventEnvelope>, control_tx: Sender<ControlEvent>) -> Self {
+    pub fn new(raw_tx: Sender<MdMsg>, raw_rx: Receiver<MdMsg>, normalized_tx: Sender<EventEnvelope>, control_tx: Sender<ControlEvent>) -> Self {
         Self {
             raw_tx,
             raw_rx,
@@ -39,7 +39,7 @@ impl BinanceAdapter {
         }
 
         for u in mem::take(&mut book.symbols_pending_snapshot) {
-            if let Err(e) = self.raw_tx.blocking_send(BinanceMdMsg::WsMessage(u)) {
+            if let Err(e) = self.raw_tx.blocking_send(MdMsg::WsMessage(u)) {
                 error!(
                     exchange = ?Exchange::Binance,
                     component = ?Component::Adapter,
@@ -61,10 +61,11 @@ impl BinanceAdapter {
         self.live_books = 0;
     }
 
-    fn validate_snapshot(&mut self, payload: &BinanceValidateSnapshot) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
-        if let Some(book) = self.book_states.get_mut(&payload.symbol) {
-            book.last_applied_update_id = Some(payload.last_update_id);
-        }
+    fn validate_snapshot(&mut self, payload: &ValidateSnapshot) -> Result<(), ValidateUpdateError> {
+        let Some(book) = self.book_states.get_mut(&payload.symbol) else {
+            return Err(ValidateUpdateError::InstrumentNotFound { instrument: payload.symbol.clone() });
+        };
+        book.last_applied_update_id = Some(payload.last_update_id);
         Ok(())
     }
 
@@ -104,9 +105,9 @@ impl BinanceAdapter {
     pub fn run(&mut self) {
         while let Some(msg) = self.raw_rx.blocking_recv() {
             match msg {
-                BinanceMdMsg::Instruments(list) => {
+                MdMsg::Instruments(list) => {
                     for i in list.iter() {
-                        self.book_states.insert(i.clone(), BinanceBookState::new());
+                        self.book_states.insert(i.clone(), BookState::new());
                     }
                     let event_envelope = EventEnvelope {
                         exchange: Exchange::Binance,
@@ -116,12 +117,12 @@ impl BinanceAdapter {
                         error!(exchange = ?Exchange::Binance, component = ?Component::Adapter, error = ?e, "error while sending running status event");
                     }
                 },
-                BinanceMdMsg::Snapshot(payload) => {
+                MdMsg::Snapshot(payload) => {
                     let Ok(parsed_snapshot) = serde_json::from_slice::<ParsedBookSnapshot>(&payload.payload) else {
                         error!(exchange = ?Exchange::Binance, component = ?Component::Adapter, symbol = ?payload.symbol, text = ?String::from_utf8(payload.payload.clone()).unwrap(), "error while parsing snapshot");
                         continue;
                     };
-                    if let Err(e) = self.validate_snapshot(&BinanceValidateSnapshot{
+                    if let Err(e) = self.validate_snapshot(&ValidateSnapshot{
                         symbol: payload.symbol.clone(),
                         last_update_id: parsed_snapshot.last_update_id
                     }) {
@@ -159,7 +160,7 @@ impl BinanceAdapter {
                         }
                     }
                 },
-                BinanceMdMsg::WsMessage(payload) => {
+                MdMsg::WsMessage(payload) => {
                     match serde_json::from_slice::<WsMessage>(&payload) {
                         Ok(WsMessage::Confirmation(confirmation)) => {
                             if let Some(result) = confirmation.result {
@@ -248,7 +249,7 @@ impl BinanceAdapter {
 }
 
 impl ExchangeAdapter for BinanceAdapter {
-    type SnapshotPayload = BinanceValidateSnapshot;
+    type SnapshotPayload = ValidateSnapshot;
     type UpdatePayload = ParsedBookUpdate;
 
     fn exchange(&self) -> Exchange {
@@ -256,7 +257,7 @@ impl ExchangeAdapter for BinanceAdapter {
     }
 
     fn validate_snapshot(&mut self, payload: &Self::SnapshotPayload) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
-        BinanceAdapter::validate_snapshot(self, payload)
+        BinanceAdapter::validate_snapshot(self, payload).map_err(|e| Box::new(e) as Box<dyn Error + Send + Sync + 'static>)
     }
 
     fn validate_update(&mut self, payload: &Self::UpdatePayload) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {

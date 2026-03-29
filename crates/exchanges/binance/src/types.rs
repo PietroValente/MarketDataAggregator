@@ -12,13 +12,13 @@ pub enum BookSyncStatus {
     Live
 }
 
-pub struct BinanceBookState {
+pub struct BookState {
     pub status: BookSyncStatus,
     pub last_applied_update_id: Option<u64>,
     pub symbols_pending_snapshot: Vec<RawMdMsg>
 }
 
-impl BinanceBookState {
+impl BookState {
     pub fn new() -> Self {
         Self {
             status: BookSyncStatus::WaitingSnapshot,
@@ -52,19 +52,19 @@ pub struct BinanceUrls {
     pub ws: Url,
 }
 
-pub struct BinanceSnapshotMsg {
+pub struct SnapshotMsg {
     pub symbol: Instrument,
     pub payload: RawMdMsg
 }
 
-pub enum BinanceMdMsg {
+pub enum MdMsg {
     Instruments(Vec<Instrument>),
-    Snapshot(BinanceSnapshotMsg),
+    Snapshot(SnapshotMsg),
     WsMessage(RawMdMsg)
 }
 
 #[derive(Clone)]
-pub struct BinanceSubscriptionMsg {
+pub struct SubscriptionMsg {
     pub symbols: Vec<Instrument>,
     pub payload: Message
 }
@@ -88,7 +88,7 @@ pub struct SubscriptionConfirmation {
     pub id: u64,
 }
 
-pub struct BinanceValidateSnapshot {
+pub struct ValidateSnapshot {
     pub symbol: Instrument,
     pub last_update_id: u64
 }

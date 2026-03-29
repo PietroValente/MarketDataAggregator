@@ -8,11 +8,11 @@ use tokio::time::{sleep, Duration};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{error, info};
 use url::Url;
-use crate::types::{ApiResponse, BinanceMdMsg, BinanceSnapshotMsg, BinanceSubscriptionMsg, BinanceUrls, DepthQuery, SubscriptionRequest};
+use crate::types::{ApiResponse, MdMsg, SnapshotMsg, SubscriptionMsg, BinanceUrls, DepthQuery, SubscriptionRequest};
 
 pub struct BinanceConnector {
     manager_tx: Sender<ManagerCommand>,
-    raw_tx: Sender<BinanceMdMsg>,
+    raw_tx: Sender<MdMsg>,
     inbound_rx: Receiver<InboundEvent>
 }
 
@@ -24,7 +24,7 @@ enum ManagerCommand {
 }
 
 impl BinanceConnector {
-    pub async fn new(client:Client, urls: BinanceUrls, max_subscription_per_ws: usize, raw_tx: Sender<BinanceMdMsg>, control_rx: Receiver<ControlEvent>) -> Result<Self, Box<dyn Error + Send + Sync + 'static>> 
+    pub async fn new(client:Client, urls: BinanceUrls, max_subscription_per_ws: usize, raw_tx: Sender<MdMsg>, control_rx: Receiver<ControlEvent>) -> Result<Self, Box<dyn Error + Send + Sync + 'static>> 
     where 
         Self: Sized
     {
@@ -37,7 +37,7 @@ impl BinanceConnector {
                                                     .flat_map(|s| s.symbols.iter().cloned())
                                                     .collect::<Vec<Instrument>>();
         raw_tx
-        .send(BinanceMdMsg::Instruments(total_instruments))
+        .send(MdMsg::Instruments(total_instruments))
         .await?;
 
         let (manager_tx, manager_rx) = channel::<ManagerCommand>(128);
@@ -66,7 +66,7 @@ impl BinanceConnector {
 }
 
 impl ExchangeConnector for BinanceConnector {
-    type SubscriptionPayload = BinanceSubscriptionMsg;
+    type SubscriptionPayload = SubscriptionMsg;
 
     fn exchange() -> Exchange {
         Exchange::Binance
@@ -98,7 +98,7 @@ impl ExchangeConnector for BinanceConnector {
         Ok(list)
     }
 
-    async fn build_subscriptions(client: Client, rest_url: &Url, max_subscription_per_ws: usize) -> Result<Vec<BinanceSubscriptionMsg>, Box<dyn Error + Send + Sync + 'static>>{
+    async fn build_subscriptions(client: Client, rest_url: &Url, max_subscription_per_ws: usize) -> Result<Vec<SubscriptionMsg>, Box<dyn Error + Send + Sync + 'static>>{
         let mut list = BinanceConnector::get_subscriptions_list_backoff(client, rest_url).await;
         let subscriptions_payloads_len = (list.len()/max_subscription_per_ws) + 1;
         let mut result = Vec::new();
@@ -132,7 +132,7 @@ impl ExchangeConnector for BinanceConnector {
             let json = serde_json::to_string(&sub_req).expect("Failed to serialize SubscribePayload to JSON");
             let message = Message::text(json);
 
-            result.push( BinanceSubscriptionMsg{
+            result.push( SubscriptionMsg{
                 symbols: symbols,
                 payload: message
             });
@@ -162,7 +162,7 @@ impl ExchangeConnector for BinanceConnector {
         while let Some(msg) = self.inbound_rx.recv().await {
             match msg {
                 InboundEvent::WsMessage(payload) => {
-                    if let Err(e) = self.raw_tx.send(BinanceMdMsg::WsMessage(payload)).await {
+                    if let Err(e) = self.raw_tx.send(MdMsg::WsMessage(payload)).await {
                         error!(exchange = ?Exchange::Binance, component = ?Component::Connector, error = ?e, "error while sending the update message");
                         continue;
                     }
@@ -203,9 +203,9 @@ async fn control_manager_task(mut control_rx: Receiver<ControlEvent>, manager_tx
 async fn connection_manager_task(
     ws_url: Arc<Url>,
     snapshot_url: Arc<Url>,
-    subscriptions_payloads: Arc<Vec<BinanceSubscriptionMsg>>,
+    subscriptions_payloads: Arc<Vec<SubscriptionMsg>>,
     inbound_tx: Sender<InboundEvent>,
-    raw_tx: Sender<BinanceMdMsg>,
+    raw_tx: Sender<MdMsg>,
     cmd_tx: Sender<ManagerCommand>,
     mut cmd_rx: Receiver<ManagerCommand>,
 ) {
@@ -269,9 +269,9 @@ async fn pong_ws(connections: &HashMap<u8, ConnectionTasks>, msg: PingMsg) {
 async fn recreate_with_snapshots_backoff(
     ws_url: Arc<Url>,
     snapshot_url: Arc<Url>,
-    subscriptions_payloads: Arc<Vec<BinanceSubscriptionMsg>>,
+    subscriptions_payloads: Arc<Vec<SubscriptionMsg>>,
     inbound_tx: Sender<InboundEvent>,
-    raw_tx: Sender<BinanceMdMsg>,
+    raw_tx: Sender<MdMsg>,
     cmd_tx: Sender<ManagerCommand>,
 ) {
     let backoff_secs = [1, 5, 15, 30, 60];
@@ -307,9 +307,9 @@ async fn recreate_with_snapshots_backoff(
 async fn recreate_with_snapshots(
     ws_url: Arc<Url>,
     snapshot_url: Arc<Url>,
-    subscriptions_payloads: Arc<Vec<BinanceSubscriptionMsg>>,
+    subscriptions_payloads: Arc<Vec<SubscriptionMsg>>,
     inbound_tx: Sender<InboundEvent>,
-    raw_tx: Sender<BinanceMdMsg>,
+    raw_tx: Sender<MdMsg>,
     cmd_tx: Sender<ManagerCommand>
 ) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
     for (i, message) in subscriptions_payloads.iter().enumerate() {
@@ -367,7 +367,7 @@ async fn recreate_with_snapshots(
                     let bytes = response.bytes().await?;
 
                     raw_tx
-                        .send(BinanceMdMsg::Snapshot(BinanceSnapshotMsg {
+                        .send(MdMsg::Snapshot(SnapshotMsg {
                             symbol,
                             payload: RawMdMsg(bytes.to_vec()),
                         }))
