@@ -1,4 +1,4 @@
-use md_core::types::{Price, Qty, RawMdMsg};
+use md_core::types::{Instrument, Price, Qty, RawMdMsg};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Deserializer, Serialize};
 use url::Url;
@@ -31,7 +31,7 @@ pub struct ApiList {
 
 #[derive(Deserialize)]
 pub struct SymbolInfo {
-    pub symbol: String,
+    pub symbol: Instrument,
     pub status: String
 }
 

@@ -1,8 +1,13 @@
-use md_core::types::{Price, Qty, RawMdMsg};
+use md_core::types::{Instrument, Price, Qty, RawMdMsg};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Deserializer, Serialize};
+use thiserror::Error;
 use url::Url;
 use std::{ops::Deref, str::FromStr};
+
+pub struct BookState {
+    pub last_seq: Option<u64>,
+}
 
 pub struct BitgetUrls {
     pub exchange_info: Url,
@@ -26,7 +31,7 @@ pub struct ApiResponse {
 
 #[derive(Deserialize)]
 pub struct SymbolInfo {
-    pub symbol: String,
+    pub symbol: Instrument,
     pub status: String
 }
 
@@ -44,7 +49,7 @@ pub struct SymbolParam {
     pub channel: String,
     
     #[serde(rename = "instId")]
-    pub inst_id: String
+    pub inst_id: Instrument
 }
 
 #[derive(Debug, Deserialize)]
@@ -68,7 +73,7 @@ pub struct ParsedBookMessage {
     pub ts: u64
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, PartialEq, Clone, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum DepthBookAction {
     Snapshot,
@@ -104,4 +109,25 @@ where
             Ok((Price(price), Qty(qty)))
         })
         .collect()
+}
+
+#[derive(Debug, Error)]
+pub enum ValidateBookError {
+    #[error("Invalid action for snapshot")]
+    InvalidSnapshotAction,
+
+    #[error("Invalid action for update")]
+    InvalidUpdateAction,
+
+    #[error("Instrument not found: {0}")]
+    InstrumentNotFound(Instrument),
+
+    #[error("Missing book data in payload")]
+    MissingBookData,
+
+    #[error("Update gap detected: seq {new_seq} <= last_seq {last_seq}")]
+    UpdateGap {
+        new_seq: u64,
+        last_seq: u64,
+    }
 }

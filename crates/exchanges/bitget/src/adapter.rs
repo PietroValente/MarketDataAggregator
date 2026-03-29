@@ -1,17 +1,20 @@
+use std::collections::HashMap;
 use std::error::Error;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use md_core::adapter_trait::ExchangeAdapter;
 use md_core::events::ControlEvent;
 use md_core::{book::BookLevels, events::{BookEventType, EventEnvelope, NormalizedBookData, NormalizedEvent}, logging::types::Component, types::{Exchange, Instrument}};
 use tokio::sync::mpsc::{Receiver, Sender};
-use tracing::error;
+use tracing::{error, warn};
 
-use crate::types::{BitgetMdMsg, DepthBookAction, ParsedBookMessage, WsMessage};
+use crate::types::{BitgetMdMsg, BookState, DepthBookAction, ParsedBookMessage, ValidateBookError, WsMessage};
 
 pub struct BitgetAdapter {
     raw_rx: Receiver<BitgetMdMsg>,
     normalized_tx: Sender<EventEnvelope>,
-    control_tx: Sender<ControlEvent>
+    control_tx: Sender<ControlEvent>,
+    book_states: HashMap<Instrument, BookState>
 }
 
 impl BitgetAdapter {
@@ -19,15 +22,53 @@ impl BitgetAdapter {
         Self {
             raw_rx,
             normalized_tx,
-            control_tx
+            control_tx,
+            book_states: HashMap::new()
         }
     }
 
-    fn validate_snapshot(&mut self, _payload: &ParsedBookMessage) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
+    fn validate_snapshot(&mut self, payload: &ParsedBookMessage) -> Result<(), ValidateBookError> {
+        if payload.action != DepthBookAction::Snapshot {
+            return Err(ValidateBookError::InvalidSnapshotAction);
+        }
+        let Some(book) = self.book_states.get_mut(&payload.arg.inst_id) else {
+            return Err(ValidateBookError::InstrumentNotFound(payload.arg.inst_id.clone()));
+        };
+        let Some(book_data) = payload.data.last() else {
+            return Err(ValidateBookError::MissingBookData);
+        };
+        book.last_seq = Some(book_data.seq);
         Ok(())
     }
 
-    fn validate_update(&mut self, _payload: &ParsedBookMessage) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
+    fn validate_update(&mut self, payload: &ParsedBookMessage) -> Result<(), ValidateBookError> {
+        if payload.action != DepthBookAction::Update {
+            return Err(ValidateBookError::InvalidUpdateAction);
+        }
+        let Some(book) = self.book_states.get_mut(&payload.arg.inst_id) else {
+            return Err(ValidateBookError::InstrumentNotFound(payload.arg.inst_id.clone()));
+        };
+        let Some(book_data) = payload.data.last() else {
+            return Err(ValidateBookError::MissingBookData);
+        };
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+
+        let latency = now.saturating_sub(book_data.ts.parse::<u64>().unwrap_or(0));
+
+        if latency > 1000 {
+            warn!(exchange = ?Exchange::Bitget, component = ?Component::Adapter, symbol = ?payload.arg.inst_id, "high latency for update: {} ms", latency);
+        }
+        
+        if let Some(last_seq) = book.last_seq {
+            if book_data.seq <= last_seq {
+                return Err(ValidateBookError::UpdateGap { new_seq: book_data.seq, last_seq });
+            }
+        }
+        book.last_seq = Some(book_data.seq);
         Ok(())
     }
 
@@ -112,11 +153,11 @@ impl ExchangeAdapter for BitgetAdapter {
     }
 
     fn validate_snapshot(&mut self, payload: &Self::SnapshotPayload) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
-        BitgetAdapter::validate_snapshot(self, payload)
+        BitgetAdapter::validate_snapshot(self, payload).map_err(|e| Box::new(e) as Box<dyn Error + Send + Sync + 'static>)
     }
 
     fn validate_update(&mut self, payload: &Self::UpdatePayload) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
-        BitgetAdapter::validate_update(self, payload)
+        BitgetAdapter::validate_update(self, payload).map_err(|e| Box::new(e) as Box<dyn Error + Send + Sync + 'static>)
     }
 
     fn run(&mut self) {

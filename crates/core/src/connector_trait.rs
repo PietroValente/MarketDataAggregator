@@ -13,7 +13,7 @@ use url::Url;
 
 use crate::events::{InboundEvent, PingMsg};
 use crate::logging::types::Component;
-use crate::types::{Exchange, RawMdMsg};
+use crate::types::{Exchange, Instrument, RawMdMsg};
 
 /// Commands that can be issued to a connection writer task.
 pub enum WriteCommand {
@@ -55,7 +55,7 @@ pub trait ExchangeConnector {
     async fn start(&mut self);
 
     /// Fetch the list of symbols/instruments to subscribe to via REST.
-    async fn get_subscriptions_list(client: Client, rest_url: &Url,) -> Result<Vec<String>, Box<dyn Error + Send + Sync + 'static>>;
+    async fn get_subscriptions_list(client: Client, rest_url: &Url,) -> Result<Vec<Instrument>, Box<dyn Error + Send + Sync + 'static>>;
 
     /// Backoff wrapper around `get_subscriptions_list`.
     ///
@@ -64,7 +64,7 @@ pub trait ExchangeConnector {
     async fn get_subscriptions_list_backoff(
         client: Client,
         rest_url: &Url
-    ) -> Vec<String> {
+    ) -> Vec<Instrument> {
         let backoff_secs = [1, 5, 15, 30, 60];
         let mut attempt: usize = 0;
     

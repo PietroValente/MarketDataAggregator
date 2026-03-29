@@ -1,4 +1,4 @@
-use md_core::types::{Price, Qty, RawMdMsg};
+use md_core::types::{Instrument, Price, Qty, RawMdMsg};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Deserializer, Serialize};
 use url::Url;
@@ -27,7 +27,7 @@ pub struct ApiResponse {
 #[derive(Deserialize)]
 pub struct SymbolInfo {
     #[serde(rename = "instId")]
-    pub inst_id: String,
+    pub inst_id: Instrument,
 
     pub state: String
 }
@@ -44,7 +44,7 @@ pub struct SymbolParam {
     pub channel: String,
     
     #[serde(rename = "instId")]
-    pub inst_id: String
+    pub inst_id: Instrument
 }
 
 #[derive(Debug, Deserialize)]

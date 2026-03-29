@@ -35,7 +35,7 @@ pub struct ApiResponse {
 
 #[derive(Deserialize)]
 pub struct SymbolInfo {
-    pub symbol: String,
+    pub symbol: Instrument,
     pub status: String
 }
 
@@ -57,7 +57,7 @@ pub struct SnapshotMsg {
     pub payload: RawMdMsg
 }
 
-pub enum MdMsg {
+pub enum BinanceMdMsg {
     Instruments(Vec<Instrument>),
     Snapshot(SnapshotMsg),
     WsMessage(RawMdMsg)
@@ -94,11 +94,9 @@ pub struct ValidateSnapshot {
 }
 
 #[derive(Error, Debug)]
-pub enum ValidateUpdateError {
-    #[error("Instrument not found: {instrument}")]
-    InstrumentNotFound {
-        instrument: Instrument,
-    },
+pub enum ValidateBookError {
+    #[error("Instrument not found: {0}")]
+    InstrumentNotFound(Instrument),
 
     #[error("Unknown type of event: {0}")]
     UnknownType(String),

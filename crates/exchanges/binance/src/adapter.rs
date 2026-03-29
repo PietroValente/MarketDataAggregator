@@ -5,11 +5,11 @@ use md_core::{book::BookLevels, events::{BookEventType, EventEnvelope, Normalize
 use tokio::sync::mpsc::{Receiver, Sender};
 use tracing::{error, warn};
 
-use crate::types::{BookState, MdMsg, ValidateSnapshot, BookSyncStatus, ParsedBookSnapshot, ParsedBookUpdate, ValidateUpdateError, WsMessage};
+use crate::types::{BookState, BinanceMdMsg, ValidateSnapshot, BookSyncStatus, ParsedBookSnapshot, ParsedBookUpdate, ValidateBookError, WsMessage};
 
 pub struct BinanceAdapter {
-    raw_tx: Sender<MdMsg>,
-    raw_rx: Receiver<MdMsg>,
+    raw_tx: Sender<BinanceMdMsg>,
+    raw_rx: Receiver<BinanceMdMsg>,
     normalized_tx: Sender<EventEnvelope>,
     control_tx: Sender<ControlEvent>,
     book_states: HashMap<Instrument, BookState>,
@@ -17,7 +17,7 @@ pub struct BinanceAdapter {
 }
 
 impl BinanceAdapter {
-    pub fn new(raw_tx: Sender<MdMsg>, raw_rx: Receiver<MdMsg>, normalized_tx: Sender<EventEnvelope>, control_tx: Sender<ControlEvent>) -> Self {
+    pub fn new(raw_tx: Sender<BinanceMdMsg>, raw_rx: Receiver<BinanceMdMsg>, normalized_tx: Sender<EventEnvelope>, control_tx: Sender<ControlEvent>) -> Self {
         Self {
             raw_tx,
             raw_rx,
@@ -39,7 +39,7 @@ impl BinanceAdapter {
         }
 
         for u in mem::take(&mut book.symbols_pending_snapshot) {
-            if let Err(e) = self.raw_tx.blocking_send(MdMsg::WsMessage(u)) {
+            if let Err(e) = self.raw_tx.blocking_send(BinanceMdMsg::WsMessage(u)) {
                 error!(
                     exchange = ?Exchange::Binance,
                     component = ?Component::Adapter,
@@ -61,20 +61,20 @@ impl BinanceAdapter {
         self.live_books = 0;
     }
 
-    fn validate_snapshot(&mut self, payload: &ValidateSnapshot) -> Result<(), ValidateUpdateError> {
+    fn validate_snapshot(&mut self, payload: &ValidateSnapshot) -> Result<(), ValidateBookError> {
         let Some(book) = self.book_states.get_mut(&payload.symbol) else {
-            return Err(ValidateUpdateError::InstrumentNotFound { instrument: payload.symbol.clone() });
+            return Err(ValidateBookError::InstrumentNotFound(payload.symbol.clone()));
         };
         book.last_applied_update_id = Some(payload.last_update_id);
         Ok(())
     }
 
-    fn validate_update(&mut self, payload: &ParsedBookUpdate) -> Result<(), ValidateUpdateError> {
+    fn validate_update(&mut self, payload: &ParsedBookUpdate) -> Result<(), ValidateBookError> {
         if payload.event_type != "depthUpdate" {
-            return Err(ValidateUpdateError::UnknownType(payload.event_type.clone()));
+            return Err(ValidateBookError::UnknownType(payload.event_type.clone()));
         }
         let Some(book) = self.book_states.get_mut(&payload.symbol) else {
-                return Err(ValidateUpdateError::InstrumentNotFound { instrument: payload.symbol.clone() });
+            return Err(ValidateBookError::InstrumentNotFound(payload.symbol.clone()));
         };
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -88,14 +88,14 @@ impl BinanceAdapter {
         }
 
         let Some(last_applied_update_id) = book.last_applied_update_id else {
-            return Err(ValidateUpdateError::MissingSnapshot);
+            return Err(ValidateBookError::MissingSnapshot);
         };
 
         if payload.final_update_id < last_applied_update_id {
-            return Err(ValidateUpdateError::StaleUpdate { event_last_update_id: payload.final_update_id, book_last_update_id: last_applied_update_id });
+            return Err(ValidateBookError::StaleUpdate { event_last_update_id: payload.final_update_id, book_last_update_id: last_applied_update_id });
         }
         if payload.first_update_id > last_applied_update_id + 1 {
-            return Err(ValidateUpdateError::UpdateGap { event_first_update_id: payload.first_update_id, expected_next_update_id: last_applied_update_id + 1 });
+            return Err(ValidateBookError::UpdateGap { event_first_update_id: payload.first_update_id, expected_next_update_id: last_applied_update_id + 1 });
         }
         book.last_applied_update_id = Some(payload.final_update_id);
 
@@ -105,7 +105,7 @@ impl BinanceAdapter {
     pub fn run(&mut self) {
         while let Some(msg) = self.raw_rx.blocking_recv() {
             match msg {
-                MdMsg::Instruments(list) => {
+                BinanceMdMsg::Instruments(list) => {
                     for i in list.iter() {
                         self.book_states.insert(i.clone(), BookState::new());
                     }
@@ -117,7 +117,7 @@ impl BinanceAdapter {
                         error!(exchange = ?Exchange::Binance, component = ?Component::Adapter, error = ?e, "error while sending running status event");
                     }
                 },
-                MdMsg::Snapshot(payload) => {
+                BinanceMdMsg::Snapshot(payload) => {
                     let Ok(parsed_snapshot) = serde_json::from_slice::<ParsedBookSnapshot>(&payload.payload) else {
                         error!(exchange = ?Exchange::Binance, component = ?Component::Adapter, symbol = ?payload.symbol, text = ?String::from_utf8(payload.payload.clone()).unwrap(), "error while parsing snapshot");
                         continue;
@@ -160,7 +160,7 @@ impl BinanceAdapter {
                         }
                     }
                 },
-                MdMsg::WsMessage(payload) => {
+                BinanceMdMsg::WsMessage(payload) => {
                     match serde_json::from_slice::<WsMessage>(&payload) {
                         Ok(WsMessage::Confirmation(confirmation)) => {
                             if let Some(result) = confirmation.result {
@@ -186,7 +186,7 @@ impl BinanceAdapter {
 
                             //process the update
                             match self.validate_update(&update) {
-                                Err(e @ ValidateUpdateError::UpdateGap {
+                                Err(e @ ValidateBookError::UpdateGap {
                                     event_first_update_id,
                                     expected_next_update_id,
                                 }) => {

@@ -8,11 +8,11 @@ use tokio::time::{sleep, Duration};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{error, info};
 use url::Url;
-use crate::types::{ApiResponse, MdMsg, SnapshotMsg, SubscriptionMsg, BinanceUrls, DepthQuery, SubscriptionRequest};
+use crate::types::{ApiResponse, BinanceMdMsg, SnapshotMsg, SubscriptionMsg, BinanceUrls, DepthQuery, SubscriptionRequest};
 
 pub struct BinanceConnector {
     manager_tx: Sender<ManagerCommand>,
-    raw_tx: Sender<MdMsg>,
+    raw_tx: Sender<BinanceMdMsg>,
     inbound_rx: Receiver<InboundEvent>
 }
 
@@ -24,7 +24,7 @@ enum ManagerCommand {
 }
 
 impl BinanceConnector {
-    pub async fn new(client:Client, urls: BinanceUrls, max_subscription_per_ws: usize, raw_tx: Sender<MdMsg>, control_rx: Receiver<ControlEvent>) -> Result<Self, Box<dyn Error + Send + Sync + 'static>> 
+    pub async fn new(client:Client, urls: BinanceUrls, max_subscription_per_ws: usize, raw_tx: Sender<BinanceMdMsg>, control_rx: Receiver<ControlEvent>) -> Result<Self, Box<dyn Error + Send + Sync + 'static>> 
     where 
         Self: Sized
     {
@@ -37,7 +37,7 @@ impl BinanceConnector {
                                                     .flat_map(|s| s.symbols.iter().cloned())
                                                     .collect::<Vec<Instrument>>();
         raw_tx
-        .send(MdMsg::Instruments(total_instruments))
+        .send(BinanceMdMsg::Instruments(total_instruments))
         .await?;
 
         let (manager_tx, manager_rx) = channel::<ManagerCommand>(128);
@@ -72,7 +72,7 @@ impl ExchangeConnector for BinanceConnector {
         Exchange::Binance
     }
 
-    async fn get_subscriptions_list(client: Client, rest_url: &Url) -> Result<Vec<String>, Box<dyn Error + Send + Sync + 'static>> {     
+    async fn get_subscriptions_list(client: Client, rest_url: &Url) -> Result<Vec<Instrument>, Box<dyn Error + Send + Sync + 'static>> {     
         let resp = client
             .get(rest_url.as_str())
             .timeout(Duration::from_secs(60))
@@ -162,7 +162,7 @@ impl ExchangeConnector for BinanceConnector {
         while let Some(msg) = self.inbound_rx.recv().await {
             match msg {
                 InboundEvent::WsMessage(payload) => {
-                    if let Err(e) = self.raw_tx.send(MdMsg::WsMessage(payload)).await {
+                    if let Err(e) = self.raw_tx.send(BinanceMdMsg::WsMessage(payload)).await {
                         error!(exchange = ?Exchange::Binance, component = ?Component::Connector, error = ?e, "error while sending the update message");
                         continue;
                     }
@@ -205,7 +205,7 @@ async fn connection_manager_task(
     snapshot_url: Arc<Url>,
     subscriptions_payloads: Arc<Vec<SubscriptionMsg>>,
     inbound_tx: Sender<InboundEvent>,
-    raw_tx: Sender<MdMsg>,
+    raw_tx: Sender<BinanceMdMsg>,
     cmd_tx: Sender<ManagerCommand>,
     mut cmd_rx: Receiver<ManagerCommand>,
 ) {
@@ -271,7 +271,7 @@ async fn recreate_with_snapshots_backoff(
     snapshot_url: Arc<Url>,
     subscriptions_payloads: Arc<Vec<SubscriptionMsg>>,
     inbound_tx: Sender<InboundEvent>,
-    raw_tx: Sender<MdMsg>,
+    raw_tx: Sender<BinanceMdMsg>,
     cmd_tx: Sender<ManagerCommand>,
 ) {
     let backoff_secs = [1, 5, 15, 30, 60];
@@ -309,7 +309,7 @@ async fn recreate_with_snapshots(
     snapshot_url: Arc<Url>,
     subscriptions_payloads: Arc<Vec<SubscriptionMsg>>,
     inbound_tx: Sender<InboundEvent>,
-    raw_tx: Sender<MdMsg>,
+    raw_tx: Sender<BinanceMdMsg>,
     cmd_tx: Sender<ManagerCommand>
 ) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
     for (i, message) in subscriptions_payloads.iter().enumerate() {
@@ -367,7 +367,7 @@ async fn recreate_with_snapshots(
                     let bytes = response.bytes().await?;
 
                     raw_tx
-                        .send(MdMsg::Snapshot(SnapshotMsg {
+                        .send(BinanceMdMsg::Snapshot(SnapshotMsg {
                             symbol,
                             payload: RawMdMsg(bytes.to_vec()),
                         }))

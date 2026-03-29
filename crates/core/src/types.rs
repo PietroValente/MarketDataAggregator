@@ -1,6 +1,6 @@
 use std::{fmt, ops::{Deref, DerefMut}};
 use rust_decimal::Decimal;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Price(pub Decimal);
@@ -54,7 +54,7 @@ impl Qty {
     }
 }
 
-#[derive(Debug, Deserialize, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
 pub struct Instrument(pub String);
 
 impl fmt::Display for Instrument {

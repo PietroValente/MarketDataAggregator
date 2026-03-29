@@ -2,7 +2,7 @@ use std::{collections::HashMap, error::Error, sync::Arc};
 
 use bytes::BytesMut;
 use futures_util::StreamExt;
-use md_core::{connector_trait::{ConnectionTasks, ExchangeConnector, WriteCommand}, events::{ControlEvent, InboundEvent, PingMsg}, logging::types::Component, types::Exchange};
+use md_core::{connector_trait::{ConnectionTasks, ExchangeConnector, WriteCommand}, events::{ControlEvent, InboundEvent, PingMsg}, logging::types::Component, types::{Exchange, Instrument}};
 use reqwest::Client;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::time::{sleep, Duration};
@@ -64,7 +64,7 @@ impl ExchangeConnector for BitgetConnector {
         Exchange::Bitget
     }
 
-    async fn get_subscriptions_list(client: Client, rest_url: &Url) -> Result<Vec<String>, Box<dyn Error + Send + Sync + 'static>> {
+    async fn get_subscriptions_list(client: Client, rest_url: &Url) -> Result<Vec<Instrument>, Box<dyn Error + Send + Sync + 'static>> {
         let resp = client
             .get(rest_url.as_str())
             .send()
