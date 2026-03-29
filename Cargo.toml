@@ -7,7 +7,6 @@ members = [ "crates/app",
     "crates/exchanges/binance", 
     "crates/exchanges/bitget", 
     "crates/exchanges/bybit", 
-    "crates/exchanges/coinbase", 
-    "crates/exchanges/kraken", 
+    "crates/exchanges/coinbase",
     "crates/exchanges/okx"]
 resolver = "3"

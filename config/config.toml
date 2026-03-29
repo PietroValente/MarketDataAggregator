@@ -29,11 +29,6 @@ exchange_info = "https://api.coinbase.com/api/v3/brokerage/market/products"
 ws = "wss://ws-feed.exchange.coinbase.com"
 max_subscription_per_ws = 50
 
-[kraken]
-exchange_info = "https://api.kraken.com/0/public/AssetPairs"
-ws = "wss://ws.kraken.com/v2"
-max_subscription_per_ws = 50
-
 [okx]
 exchange_info = "https://www.okx.com/api/v5/public/instruments?instType=SPOT"
 ws = "wss://ws.okx.com:8443/ws/v5/public"

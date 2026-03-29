@@ -171,7 +171,7 @@ mod tests {
 
     #[test]
     fn snapshot_overwrites_existing_instrument_state() {
-        let mut state = ExchangeState::new(Exchange::Kraken);
+        let mut state = ExchangeState::new(Exchange::Okx);
         let inst = instrument("SOLUSDT");
 
         state.apply_snapshot(NormalizedBookData {

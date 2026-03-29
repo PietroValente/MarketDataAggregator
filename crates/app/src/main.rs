@@ -4,7 +4,6 @@ use bitget::{connector::BitgetConnector, adapter::BitgetAdapter, types::{BitgetM
 use bybit::{connector::BybitConnector, adapter::BybitAdapter, types::{BybitMdMsg, BybitUrls}};
 use coinbase::{connector::CoinbaseConnector, adapter::CoinbaseAdapter, types::{CoinbaseMdMsg, CoinbaseUrls}};
 use engine::Engine;
-use kraken::{adapter::KrakenAdapter, connector::KrakenConnector, types::{KrakenMdMsg, KrakenUrls}};
 use okx::{connector::OkxConnector, adapter::OkxAdapter, types::{OkxMdMsg, OkxUrls}};
 use query::query_manager::QueryManager;
 use reqwest::Client;
@@ -50,7 +49,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (bitget_control_tx, bitget_control_rx) = channel::<ControlEvent>(config.channels.control_buffer);
     let (bybit_control_tx, bybit_control_rx) = channel::<ControlEvent>(config.channels.control_buffer);
     let (coinbase_control_tx, coinbase_control_rx) = channel::<ControlEvent>(config.channels.control_buffer);
-    let (kraken_control_tx, kraken_control_rx) = channel::<ControlEvent>(config.channels.control_buffer);
     let (okx_control_tx, okx_control_rx) = channel::<ControlEvent>(config.channels.control_buffer);
 
     /* ENGINE */
@@ -59,7 +57,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Exchange::Bitget,
         Exchange::Bybit,
         Exchange::Coinbase,
-        Exchange::Kraken,
         Exchange::Okx
     ];
     let (normalized_tx, normalized_rx) = channel::<EventEnvelope>(config.channels.normalized_buffer);
@@ -73,14 +70,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (bitget_raw_tx, bitget_raw_rx) = channel::<BitgetMdMsg>(config.channels.raw_buffer);
     let (bybit_raw_tx, bybit_raw_rx) = channel::<BybitMdMsg>(config.channels.raw_buffer);
     let (coinbase_raw_tx, coinbase_raw_rx) = channel::<CoinbaseMdMsg>(config.channels.raw_buffer);
-    let (kraken_raw_tx, kraken_raw_rx) = channel::<KrakenMdMsg>(config.channels.raw_buffer);
     let (okx_raw_tx, okx_raw_rx) = channel::<OkxMdMsg>(config.channels.raw_buffer);
 
     let mut binance_adapter = BinanceAdapter::new(binance_raw_tx.clone(), binance_raw_rx, normalized_tx.clone(), binance_control_tx);
     let mut bitget_adapter = BitgetAdapter::new(bitget_raw_rx, normalized_tx.clone(), bitget_control_tx);
     let mut bybit_adapter = BybitAdapter::new(bybit_raw_rx, normalized_tx.clone(), bybit_control_tx);
     let mut coinbase_adapter = CoinbaseAdapter::new(coinbase_raw_rx, normalized_tx.clone(), coinbase_control_tx);
-    let mut kraken_adapter = KrakenAdapter::new(kraken_raw_rx, normalized_tx.clone(), kraken_control_tx);
     let mut okx_adapter = OkxAdapter::new(okx_raw_rx, normalized_tx.clone(), okx_control_tx);
     
     thread::spawn(move || {
@@ -96,9 +91,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         coinbase_adapter.run();
     });
     thread::spawn(move || {
-        kraken_adapter.run();
-    });
-    thread::spawn(move || {
         okx_adapter.run();
     });
     
@@ -111,7 +103,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let bitget_client = client.clone();
     let bybit_client = client.clone();
     let coinbase_client = client.clone();
-    let kraken_client = client.clone();
     let okx_client = client.clone();
 
     let binance_urls = BinanceUrls { 
@@ -130,10 +121,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let coinbase_urls = CoinbaseUrls { 
         exchange_info: Url::parse(&config.coinbase.exchange_info)?,
         ws: Url::parse(&config.coinbase.ws)? 
-    };
-    let kraken_urls = KrakenUrls { 
-        exchange_info: Url::parse(&config.kraken.exchange_info)?,
-        ws: Url::parse(&config.kraken.ws)?  
     };
     let okx_urls = OkxUrls { 
         exchange_info: Url::parse(&config.okx.exchange_info)?,
@@ -155,10 +142,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tokio::spawn(async move {
         let mut coinbase_connector = CoinbaseConnector::new(coinbase_client, coinbase_urls, config.coinbase.max_subscription_per_ws, coinbase_raw_tx, coinbase_control_rx).await.unwrap();
         coinbase_connector.start().await;
-    });
-    tokio::spawn(async move {
-        let mut kraken_connector = KrakenConnector::new(kraken_client, kraken_urls, config.kraken.max_subscription_per_ws, kraken_raw_tx, kraken_control_rx).await.unwrap();
-        kraken_connector.start().await;
     });
     tokio::spawn(async move {
         let mut okx_connector = OkxConnector::new(okx_client, okx_urls, config.okx.max_subscription_per_ws, okx_raw_tx, okx_control_rx).await.unwrap();

@@ -9,7 +9,7 @@ The goal is twofold:
 - **Solve a real problem**: make it easy to understand how the same instrument behaves on different exchanges – who has the best price, which venue is more liquid, how markets react to events across venues.
 - **Showcase solid engineering practices**: clean architecture, explicit concurrency decisions, strong error handling, structured tracing, and durable logging via ScyllaDB.
 
-At the moment, Binance is fully integrated and used as the reference implementation; the architecture, traits, and control flows are designed so that other exchanges (Coinbase, Kraken, OKX, Bybit, Bitget, …) plug into the same pattern.
+At the moment, Binance is fully integrated and used as the reference implementation; the architecture, traits, and control flows are designed so that other exchanges (Coinbase, OKX, Bybit, Bitget, …) plug into the same pattern.
 
 ---
 
@@ -48,7 +48,7 @@ The long‑term vision is to make it trivial to compare the same symbol across v
 The repository is organized as a Rust workspace, with a clear separation of responsibilities:
 
 - **`app`** – the main binary. It wires together connectors, parsers, the central engine, the interactive query interface, and the logging pipeline.
-- **`exchanges/*`** – one crate per exchange (Binance, Coinbase, Kraken, OKX, Bybit, Bitget, …). Each exchange implements a common `ExchangeConnector` trait and defines its own parser and message types.
+- **`exchanges/*`** – one crate per exchange (Binance, Coinbase, OKX, Bybit, Bitget, …). Each exchange implements a common `ExchangeConnector` trait and defines its own parser and message types.
 - **`core` (`md_core`)** – shared domain model and infrastructure:
   - Order book types (`BookSnapshot`, `BookUpdate`, `BookLevel`).
   - Normalized events and queries (`NormalizedEvent`, `EventEnvelope`, `ControlEvent`, `NormalizedQuery`, …).

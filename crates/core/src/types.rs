@@ -89,7 +89,6 @@ pub enum Exchange {
     Bitget,
     Bybit,
     Coinbase,
-    Kraken,
     Okx
 }
 
@@ -101,7 +100,6 @@ impl fmt::Display for Exchange {
             Exchange::Bitget => write!(f, "Bitget"),
             Exchange::Bybit => write!(f, "Bybit"),
             Exchange::Coinbase => write!(f, "Coinbase"),
-            Exchange::Kraken => write!(f, "Kraken"),
             Exchange::Okx => write!(f, "OKX")
         }
     }
@@ -113,7 +111,6 @@ impl From<&str> for Exchange {
             "binance" => Exchange::Binance,
             "bitget" => Exchange::Bitget,
             "bybit" => Exchange::Bybit,
-            "kraken" => Exchange::Kraken,
             "coinbase" => Exchange::Coinbase,
             "okx" => Exchange::Okx,
             _ => Exchange::Unknown
