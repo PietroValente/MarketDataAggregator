@@ -52,6 +52,15 @@ impl BinanceAdapter {
         self.live_books += 1;
     }
 
+    fn clear_book_state(&mut self) {
+        for (_, book) in &mut self.book_states {
+            book.status = BookSyncStatus::WaitingSnapshot;
+            book.last_applied_update_id = None;
+            book.symbols_pending_snapshot.clear();
+        }
+        self.live_books = 0;
+    }
+
     fn validate_snapshot(&mut self, payload: &BinanceValidateSnapshot) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
         if let Some(book) = self.book_states.get_mut(&payload.symbol) {
             book.last_applied_update_id = Some(payload.last_update_id);
@@ -96,8 +105,6 @@ impl BinanceAdapter {
         while let Some(msg) = self.raw_rx.blocking_recv() {
             match msg {
                 BinanceMdMsg::Instruments(list) => {
-                    self.book_states.clear();
-                    self.live_books = 0;
                     for i in list.iter() {
                         self.book_states.insert(i.clone(), BinanceBookState::new());
                     }
@@ -118,7 +125,8 @@ impl BinanceAdapter {
                         symbol: payload.symbol.clone(),
                         last_update_id: parsed_snapshot.last_update_id
                     }) {
-                        error!(exchange = ?Exchange::Binance, component = ?Component::Adapter, symbol = ?payload.symbol, error = ?e, "error while validating snapshot");                        
+                        error!(exchange = ?Exchange::Binance, component = ?Component::Adapter, symbol = ?payload.symbol, error = ?e, "error while validating snapshot");
+                        self.clear_book_state();                      
                         if let Err(e) = self.control_tx.blocking_send(ControlEvent::Resync) {
                             error!(exchange = ?Exchange::Binance, component = ?Component::Adapter, error = ?e, "error while sending resync");
                         }
@@ -190,7 +198,7 @@ impl BinanceAdapter {
                                         expected_next_update_id = expected_next_update_id,
                                         "error while validating update"
                                     );
-                                    
+                                    self.clear_book_state();
                                     if let Err(e) = self.control_tx.blocking_send(ControlEvent::Resync) {
                                         error!(
                                             exchange = ?Exchange::Binance,

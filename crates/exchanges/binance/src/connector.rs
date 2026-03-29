@@ -32,10 +32,13 @@ impl BinanceConnector {
         let snapshot_url = Arc::from(urls.snapshot);
         let ws_url = Arc::from(urls.ws);
         let subscriptions_payloads = Arc::new(BinanceConnector::build_subscriptions(client, &urls.exchange_info, max_subscription_per_ws).await?);
-        let total_instruments = Arc::from(subscriptions_payloads
+        let total_instruments = subscriptions_payloads
                                                     .iter()
                                                     .flat_map(|s| s.symbols.iter().cloned())
-                                                    .collect::<Vec<Instrument>>());
+                                                    .collect::<Vec<Instrument>>();
+        raw_tx
+        .send(BinanceMdMsg::Instruments(total_instruments))
+        .await?;
 
         let (manager_tx, manager_rx) = channel::<ManagerCommand>(128);
 
@@ -43,7 +46,6 @@ impl BinanceConnector {
             ws_url.clone(),
             snapshot_url,
             subscriptions_payloads,
-            total_instruments,
             inbound_tx,
             raw_tx.clone(),
             manager_tx.clone(),
@@ -202,7 +204,6 @@ async fn connection_manager_task(
     ws_url: Arc<Url>,
     snapshot_url: Arc<Url>,
     subscriptions_payloads: Arc<Vec<BinanceSubscriptionMsg>>,
-    total_instruments: Arc<Vec<Instrument>>,
     inbound_tx: Sender<InboundEvent>,
     raw_tx: Sender<BinanceMdMsg>,
     cmd_tx: Sender<ManagerCommand>,
@@ -235,7 +236,6 @@ async fn connection_manager_task(
                     ws_url.clone(),
                     snapshot_url.clone(),
                     subscriptions_payloads.clone(),
-                    total_instruments.clone(),
                     inbound_tx.clone(),
                     raw_tx.clone(),
                     cmd_tx.clone()
@@ -270,7 +270,6 @@ async fn recreate_with_snapshots_backoff(
     ws_url: Arc<Url>,
     snapshot_url: Arc<Url>,
     subscriptions_payloads: Arc<Vec<BinanceSubscriptionMsg>>,
-    total_instruments: Arc<Vec<Instrument>>,
     inbound_tx: Sender<InboundEvent>,
     raw_tx: Sender<BinanceMdMsg>,
     cmd_tx: Sender<ManagerCommand>,
@@ -283,7 +282,6 @@ async fn recreate_with_snapshots_backoff(
             ws_url.clone(),
             snapshot_url.clone(),
             subscriptions_payloads.clone(),
-            total_instruments.clone(),
             inbound_tx.clone(),
             raw_tx.clone(),
             cmd_tx.clone()
@@ -310,14 +308,10 @@ async fn recreate_with_snapshots(
     ws_url: Arc<Url>,
     snapshot_url: Arc<Url>,
     subscriptions_payloads: Arc<Vec<BinanceSubscriptionMsg>>,
-    total_instruments: Arc<Vec<Instrument>>,
     inbound_tx: Sender<InboundEvent>,
     raw_tx: Sender<BinanceMdMsg>,
     cmd_tx: Sender<ManagerCommand>
 ) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
-    raw_tx
-        .send(BinanceMdMsg::Instruments(total_instruments.clone()))
-        .await?;
     for (i, message) in subscriptions_payloads.iter().enumerate() {
         let (writer_tx, writer_rx) = channel::<WriteCommand>(64);
         let (ws_stream, _) = connect_async(ws_url.as_str()).await?;
