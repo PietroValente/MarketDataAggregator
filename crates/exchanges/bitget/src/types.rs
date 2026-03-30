@@ -2,11 +2,20 @@ use md_core::types::{Instrument, Price, Qty, RawMdMsg};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Deserializer, Serialize};
 use thiserror::Error;
+use tokio_tungstenite::tungstenite::Message;
 use url::Url;
-use std::{ops::Deref, str::FromStr};
+use std::str::FromStr;
 
 pub struct BookState {
-    pub last_seq: Option<u64>,
+    pub last_seq: Option<u64>
+}
+
+impl BookState {
+    pub fn new() -> Self {
+        Self {
+            last_seq: None
+        }
+    }
 }
 
 pub struct BitgetUrls {
@@ -14,14 +23,15 @@ pub struct BitgetUrls {
     pub ws: Url,
 }
 
-pub struct BitgetMdMsg(pub RawMdMsg);
+pub enum BitgetMdMsg {
+    Instruments(Vec<Instrument>),
+    Raw(RawMdMsg)
+}
 
-impl Deref for BitgetMdMsg {
-    type Target = RawMdMsg;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
+#[derive(Clone)]
+pub struct Subscriptions {
+    pub symbols: Vec<Instrument>,
+    pub messages: Vec<Message>
 }
 
 #[derive(Deserialize)]
@@ -125,8 +135,8 @@ pub enum ValidateBookError {
     #[error("Missing book data in payload")]
     MissingBookData,
 
-    #[error("Update gap detected: seq {new_seq} <= last_seq {last_seq}")]
-    UpdateGap {
+    #[error("Stale update: event seq={new_seq} <= book last_seq={last_seq}")]
+    StaleUpdate {
         new_seq: u64,
         last_seq: u64,
     }

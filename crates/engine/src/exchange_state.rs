@@ -13,7 +13,7 @@ impl ExchangeState {
     pub fn new(e: Exchange) -> Self {
         Self {
             exchange: e,
-            status: ExchangeStatus::Initializing,
+            status: ExchangeStatus::Initializing(0.0),
             markets: HashMap::new()
         }
     }
@@ -115,7 +115,7 @@ mod tests {
     #[test]
     fn status_defaults_to_initializing_and_transitions_are_persisted() {
         let mut state = ExchangeState::new(Exchange::Coinbase);
-        assert!(matches!(state.get_status(), ExchangeStatus::Initializing));
+        assert!(matches!(state.get_status(), ExchangeStatus::Initializing(0.0)));
 
         state.apply_status(ExchangeStatus::Running);
         assert!(matches!(state.get_status(), ExchangeStatus::Running));

@@ -1,6 +1,7 @@
 use md_core::types::{Instrument, Price, Qty, RawMdMsg};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Deserializer, Serialize};
+use tokio_tungstenite::tungstenite::Message;
 use url::Url;
 use std::{ops::Deref, str::FromStr};
 
@@ -17,6 +18,12 @@ impl Deref for OkxMdMsg {
     fn deref(&self) -> &Self::Target {
         &self.0
     }
+}
+
+#[derive(Clone)]
+pub struct Subscriptions {
+    pub symbols: Vec<Instrument>,
+    pub messages: Vec<Message>
 }
 
 #[derive(Deserialize)]

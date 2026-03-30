@@ -64,9 +64,15 @@ pub enum BinanceMdMsg {
 }
 
 #[derive(Clone)]
-pub struct SubscriptionMsg {
+pub struct Subscriptions {
     pub symbols: Vec<Instrument>,
-    pub payload: Message
+    pub batches: Vec<SubscriptionBatch>,
+}
+
+#[derive(Clone)]
+pub struct SubscriptionBatch {
+    pub symbols: Vec<Instrument>,
+    pub message: Message,
 }
 
 #[derive(Debug, Serialize)]
@@ -101,7 +107,7 @@ pub enum ValidateBookError {
     #[error("Unknown type of event: {0}")]
     UnknownType(String),
 
-    #[error("Stale update: event last_update_id={event_last_update_id} < book last_applied_update_id={book_last_update_id}")]
+    #[error("Stale update: event last_update_id={event_last_update_id} <= book last_applied_update_id={book_last_update_id}")]
     StaleUpdate {
         event_last_update_id: u64,
         book_last_update_id: u64,

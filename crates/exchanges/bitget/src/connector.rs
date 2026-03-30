@@ -10,7 +10,7 @@ use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{error, info};
 use url::Url;
 
-use crate::types::{ApiResponse, BitgetMdMsg, BitgetUrls, SubscriptionRequest, SymbolParam};
+use crate::types::{ApiResponse, BitgetMdMsg, BitgetUrls, Subscriptions, SubscriptionRequest, SymbolParam};
 
 pub struct BitgetConnector {
     manager_tx: Sender<ManagerCommand>,
@@ -32,8 +32,12 @@ impl BitgetConnector {
     {
         let (inbound_tx, inbound_rx) = channel::<InboundEvent>(4096);
         let ws_url = Arc::from(urls.ws);
-        let subscriptions_payloads = Arc::new(BitgetConnector::build_subscriptions(client, &urls.exchange_info, max_subscription_per_ws).await?);
-
+        let subscriptions = BitgetConnector::build_subscriptions(client, &urls.exchange_info, max_subscription_per_ws).await?;
+        let subscriptions_payloads = Arc::new(subscriptions.messages);
+        raw_tx
+            .send(BitgetMdMsg::Instruments(subscriptions.symbols))
+            .await?;
+        
         let (manager_tx, manager_rx) = channel::<ManagerCommand>(128);
 
         tokio::spawn(connection_manager_task(
@@ -58,7 +62,7 @@ impl BitgetConnector {
 }
 
 impl ExchangeConnector for BitgetConnector {
-    type SubscriptionPayload = Message;
+    type SubscriptionsInfo = Subscriptions;
 
     fn exchange() -> Exchange {
         Exchange::Bitget
@@ -89,36 +93,32 @@ impl ExchangeConnector for BitgetConnector {
         Ok(list)
     }
 
-    async fn build_subscriptions(client: Client, rest_url: &Url, max_subscription_per_ws: usize) -> Result<Vec<Message>, Box<dyn Error + Send + Sync + 'static>>{
-        let mut list = BitgetConnector::get_subscriptions_list_backoff(client, rest_url).await;
-        let subscriptions_payloads_len = (list.len()/max_subscription_per_ws) + 1;
-        let mut result = Vec::new();
-        for i in 0..subscriptions_payloads_len {
-            let mut params_len = max_subscription_per_ws;
-            if i == subscriptions_payloads_len - 1 { 
-                params_len = list.len();
-            }
-            let symbols: Vec<SymbolParam> = list
-                .drain(..params_len)
-                .map(|x| {
-                    SymbolParam {
-                        inst_type: String::from("SPOT"),
-                        channel: String::from("books"),
-                        inst_id: x
-                    }
+    async fn build_subscriptions(client: Client, rest_url: &Url, max_subscription_per_ws: usize) -> Result<Subscriptions, Box<dyn Error + Send + Sync + 'static>> {    
+        let symbols = BitgetConnector::get_subscriptions_list_backoff(client, rest_url).await;
+        let mut messages = Vec::new();
+    
+        for chunk in symbols.chunks(max_subscription_per_ws) {
+            let args: Vec<SymbolParam> = chunk
+                .iter()
+                .cloned()
+                .map(|symbol| SymbolParam {
+                    inst_type: String::from("SPOT"),
+                    channel: String::from("books"),
+                    inst_id: symbol,
                 })
                 .collect();
-
+    
             let sub_req = SubscriptionRequest {
                 op: String::from("subscribe"),
-                args: symbols
+                args,
             };
-            let json = serde_json::to_string(&sub_req).expect("Failed to serialize SubscribePayload to JSON");
+    
+            let json = serde_json::to_string(&sub_req)?;
             let message = Message::text(json);
-
-            result.push( message );
+            messages.push(message);
         }
-        Ok(result)
+    
+        Ok(Subscriptions { symbols, messages })
     }
 
     async fn subscribe_streams(&mut self) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
@@ -143,7 +143,7 @@ impl ExchangeConnector for BitgetConnector {
         while let Some(msg) = self.inbound_rx.recv().await {
             match msg {
                 InboundEvent::WsMessage(payload) => {
-                    if let Err(e) = self.raw_tx.send(BitgetMdMsg(payload)).await {
+                    if let Err(e) = self.raw_tx.send(BitgetMdMsg::Raw(payload)).await {
                         error!(exchange = ?Exchange::Bitget, component = ?Component::Connector, error = ?e, "error while sending the ws message");
                         continue;
                     }

@@ -353,7 +353,7 @@ mod tests {
                 let status = if rng.gen_bool(0.5) {
                     ExchangeStatus::Running
                 } else {
-                    ExchangeStatus::Initializing
+                    ExchangeStatus::Initializing(0.0)
                 };
                 tx.blocking_send(envelope(ex, NormalizedEvent::ApplyStatus(status)))
                     .expect("send status");

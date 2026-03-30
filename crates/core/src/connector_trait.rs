@@ -37,13 +37,13 @@ pub struct ConnectionTasks {
 #[allow(async_fn_in_trait)]
 pub trait ExchangeConnector {
     /// Type used to represent a single subscription payload for this exchange.
-    type SubscriptionPayload;
+    type SubscriptionsInfo;
 
     /// Exchange identifier for logging/telemetry.
     fn exchange() -> Exchange;
 
     /// Build websocket subscription payloads, splitting the symbol list across multiple connections if needed.
-    async fn build_subscriptions(client: Client, rest_url: &Url, max_subscription_per_ws: usize) -> Result<Vec<Self::SubscriptionPayload>, Box<dyn Error + Send + Sync + 'static>>;
+    async fn build_subscriptions(client: Client, rest_url: &Url, max_subscription_per_ws: usize) -> Result<Self::SubscriptionsInfo, Box<dyn Error + Send + Sync + 'static>>;
 
     /// (Re)create websocket streams and start listening for market data.
     async fn subscribe_streams(&mut self) -> Result<(), Box<dyn Error + Send + Sync + 'static>>;

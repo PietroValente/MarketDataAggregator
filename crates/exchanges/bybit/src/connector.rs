@@ -10,7 +10,7 @@ use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{error, info};
 use url::Url;
 
-use crate::types::{ApiResponse, BybitMdMsg, BybitUrls, SubscriptionRequest};
+use crate::types::{ApiResponse, BybitMdMsg, BybitUrls, SubscriptionRequest, Subscriptions};
 
 pub struct BybitConnector {
     manager_tx: Sender<ManagerCommand>,
@@ -32,7 +32,11 @@ impl BybitConnector {
     {
         let (inbound_tx, inbound_rx) = channel::<InboundEvent>(4096);
         let ws_url = Arc::from(urls.ws);
-        let subscriptions_payloads = Arc::new(BybitConnector::build_subscriptions(client, &urls.exchange_info, max_subscription_per_ws).await?);
+        let subscriptions = BybitConnector::build_subscriptions(client, &urls.exchange_info, max_subscription_per_ws).await?;
+        let subscriptions_payloads = Arc::new(subscriptions.messages);
+        // raw_tx
+        //     .send(BitgetMdMsg::Instruments(subscriptions.symbols))
+        //     .await?;
 
         let (manager_tx, manager_rx) = channel::<ManagerCommand>(128);
 
@@ -58,7 +62,7 @@ impl BybitConnector {
 }
 
 impl ExchangeConnector for BybitConnector {
-    type SubscriptionPayload = Message;
+    type SubscriptionsInfo = Subscriptions;
 
     fn exchange() -> Exchange {
         Exchange::Bybit
@@ -89,34 +93,41 @@ impl ExchangeConnector for BybitConnector {
         Ok(list)
     }
 
-    async fn build_subscriptions(client: Client, rest_url: &Url, max_subscription_per_ws: usize) -> Result<Vec<Message>, Box<dyn Error + Send + Sync + 'static>>{
-        let mut list = BybitConnector::get_subscriptions_list_backoff(client, rest_url).await;
-        let subscriptions_payloads_len = (list.len()/max_subscription_per_ws) + 1;
-        let mut result = Vec::new();
-        let update_settings = "orderbook.200.";
-        for i in 0..subscriptions_payloads_len {
-            let mut params_len = max_subscription_per_ws;
-            if i == subscriptions_payloads_len - 1 { 
-                params_len = list.len();
-            }
-            let symbols: Vec<String> = list
-                .drain(..params_len)
-                .map(|mut x| {
-                    x.0.insert_str(0, &update_settings);
-                    x.0
+    async fn build_subscriptions(
+        client: Client,
+        rest_url: &Url,
+        max_subscription_per_ws: usize,
+    ) -> Result<Subscriptions, Box<dyn Error + Send + Sync + 'static>> {
+        if max_subscription_per_ws == 0 {
+            return Err("max_subscription_per_ws cannot be 0".into());
+        }
+    
+        let symbols = BybitConnector::get_subscriptions_list_backoff(client, rest_url).await;
+        let mut messages = Vec::new();
+        let update_prefix = "orderbook.200.";
+    
+        for chunk in symbols.chunks(max_subscription_per_ws) {
+            let args: Vec<String> = chunk
+                .iter()
+                .map(|x| {
+                    let mut s = x.0.clone();
+                    s.insert_str(0, update_prefix);
+                    s
                 })
                 .collect();
-
+    
             let sub_req = SubscriptionRequest {
                 op: String::from("subscribe"),
-                args: symbols
+                args,
             };
-            let json = serde_json::to_string(&sub_req).expect("Failed to serialize SubscribePayload to JSON");
+    
+            let json = serde_json::to_string(&sub_req)?;
             let message = Message::text(json);
-
-            result.push( message );
+    
+            messages.push(message);
         }
-        Ok(result)
+    
+        Ok(Subscriptions { symbols, messages })
     }
 
     async fn subscribe_streams(&mut self) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {

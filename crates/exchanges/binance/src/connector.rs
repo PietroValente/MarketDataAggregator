@@ -8,7 +8,7 @@ use tokio::time::{sleep, Duration};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{error, info};
 use url::Url;
-use crate::types::{ApiResponse, BinanceMdMsg, SnapshotMsg, SubscriptionMsg, BinanceUrls, DepthQuery, SubscriptionRequest};
+use crate::types::{ApiResponse, BinanceMdMsg, BinanceUrls, DepthQuery, SnapshotMsg, SubscriptionBatch, SubscriptionRequest, Subscriptions};
 
 pub struct BinanceConnector {
     manager_tx: Sender<ManagerCommand>,
@@ -31,21 +31,18 @@ impl BinanceConnector {
         let (inbound_tx, inbound_rx) = channel::<InboundEvent>(4096);
         let snapshot_url = Arc::from(urls.snapshot);
         let ws_url = Arc::from(urls.ws);
-        let subscriptions_payloads = Arc::new(BinanceConnector::build_subscriptions(client, &urls.exchange_info, max_subscription_per_ws).await?);
-        let total_instruments = subscriptions_payloads
-                                                    .iter()
-                                                    .flat_map(|s| s.symbols.iter().cloned())
-                                                    .collect::<Vec<Instrument>>();
+        let subscriptions = BinanceConnector::build_subscriptions(client, &urls.exchange_info, max_subscription_per_ws).await?;
+        let batches_payloads = Arc::from(subscriptions.batches);
         raw_tx
-        .send(BinanceMdMsg::Instruments(total_instruments))
-        .await?;
+            .send(BinanceMdMsg::Instruments(subscriptions.symbols))
+            .await?;
 
         let (manager_tx, manager_rx) = channel::<ManagerCommand>(128);
 
         tokio::spawn(connection_manager_task(
             ws_url.clone(),
             snapshot_url,
-            subscriptions_payloads,
+            batches_payloads,
             inbound_tx,
             raw_tx.clone(),
             manager_tx.clone(),
@@ -66,7 +63,7 @@ impl BinanceConnector {
 }
 
 impl ExchangeConnector for BinanceConnector {
-    type SubscriptionPayload = SubscriptionMsg;
+    type SubscriptionsInfo = Subscriptions;
 
     fn exchange() -> Exchange {
         Exchange::Binance
@@ -98,46 +95,47 @@ impl ExchangeConnector for BinanceConnector {
         Ok(list)
     }
 
-    async fn build_subscriptions(client: Client, rest_url: &Url, max_subscription_per_ws: usize) -> Result<Vec<SubscriptionMsg>, Box<dyn Error + Send + Sync + 'static>>{
-        let mut list = BinanceConnector::get_subscriptions_list_backoff(client, rest_url).await;
-        let subscriptions_payloads_len = (list.len()/max_subscription_per_ws) + 1;
-        let mut result = Vec::new();
+    async fn build_subscriptions(
+        client: Client,
+        rest_url: &Url,
+        max_subscription_per_ws: usize,
+    ) -> Result<Subscriptions, Box<dyn Error + Send + Sync + 'static>> {
+        if max_subscription_per_ws == 0 {
+            return Err("max_subscription_per_ws cannot be 0".into());
+        }
+    
+        let symbols = BinanceConnector::get_subscriptions_list_backoff(client, rest_url).await;
+        let mut batches = Vec::new();
         let update_settings = "@depth@100ms";
-        for i in 0..subscriptions_payloads_len {
-            let mut params_len = max_subscription_per_ws;
-            if i == subscriptions_payloads_len - 1 { 
-                params_len = list.len();
-            }
-            let symbols: Vec<Instrument> = list
-                .drain(..params_len)
-                .map(|x| Instrument::from(x))
-                .collect();
-
-            let params: Vec<String> = 
-                symbols
-                .clone()
-                .into_iter()
+    
+        for (i, chunk) in symbols.chunks(max_subscription_per_ws).enumerate() {
+            let batch_symbols: Vec<Instrument> = chunk.to_vec();
+    
+            let params: Vec<String> = batch_symbols
+                .iter()
                 .map(|x| {
-                    let mut s = x.to_string();
-                    s.push_str(&update_settings);
-                    s.to_lowercase()
+                    let mut s = x.to_string().to_lowercase();
+                    s.push_str(update_settings);
+                    s
                 })
                 .collect();
-
+    
             let sub_req = SubscriptionRequest {
                 method: String::from("SUBSCRIBE"),
-                params: params.clone(),
-                id: i as i64
+                params,
+                id: i as i64,
             };
-            let json = serde_json::to_string(&sub_req).expect("Failed to serialize SubscribePayload to JSON");
+    
+            let json = serde_json::to_string(&sub_req)?;
             let message = Message::text(json);
-
-            result.push( SubscriptionMsg{
-                symbols: symbols,
-                payload: message
+    
+            batches.push(SubscriptionBatch {
+                symbols: batch_symbols,
+                message,
             });
         }
-        Ok(result)
+    
+        Ok(Subscriptions { symbols, batches })
     }
 
     async fn subscribe_streams(&mut self) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
@@ -203,7 +201,7 @@ async fn control_manager_task(mut control_rx: Receiver<ControlEvent>, manager_tx
 async fn connection_manager_task(
     ws_url: Arc<Url>,
     snapshot_url: Arc<Url>,
-    subscriptions_payloads: Arc<Vec<SubscriptionMsg>>,
+    batches_payloads: Arc<Vec<SubscriptionBatch>>,
     inbound_tx: Sender<InboundEvent>,
     raw_tx: Sender<BinanceMdMsg>,
     cmd_tx: Sender<ManagerCommand>,
@@ -235,7 +233,7 @@ async fn connection_manager_task(
                 tokio::spawn(recreate_with_snapshots_backoff(
                     ws_url.clone(),
                     snapshot_url.clone(),
-                    subscriptions_payloads.clone(),
+                    batches_payloads.clone(),
                     inbound_tx.clone(),
                     raw_tx.clone(),
                     cmd_tx.clone()
@@ -269,7 +267,7 @@ async fn pong_ws(connections: &HashMap<u8, ConnectionTasks>, msg: PingMsg) {
 async fn recreate_with_snapshots_backoff(
     ws_url: Arc<Url>,
     snapshot_url: Arc<Url>,
-    subscriptions_payloads: Arc<Vec<SubscriptionMsg>>,
+    batches_payloads: Arc<Vec<SubscriptionBatch>>,
     inbound_tx: Sender<InboundEvent>,
     raw_tx: Sender<BinanceMdMsg>,
     cmd_tx: Sender<ManagerCommand>,
@@ -281,7 +279,7 @@ async fn recreate_with_snapshots_backoff(
         match recreate_with_snapshots(
             ws_url.clone(),
             snapshot_url.clone(),
-            subscriptions_payloads.clone(),
+            batches_payloads.clone(),
             inbound_tx.clone(),
             raw_tx.clone(),
             cmd_tx.clone()
@@ -307,12 +305,12 @@ async fn recreate_with_snapshots_backoff(
 async fn recreate_with_snapshots(
     ws_url: Arc<Url>,
     snapshot_url: Arc<Url>,
-    subscriptions_payloads: Arc<Vec<SubscriptionMsg>>,
+    batches_payloads: Arc<Vec<SubscriptionBatch>>,
     inbound_tx: Sender<InboundEvent>,
     raw_tx: Sender<BinanceMdMsg>,
     cmd_tx: Sender<ManagerCommand>
 ) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
-    for (i, message) in subscriptions_payloads.iter().enumerate() {
+    for (i, batch) in batches_payloads.iter().enumerate() {
         let (writer_tx, writer_rx) = channel::<WriteCommand>(64);
         let (ws_stream, _) = connect_async(ws_url.as_str()).await?;
         let (write, read) = ws_stream.split();
@@ -337,13 +335,13 @@ async fn recreate_with_snapshots(
         })).await?;
 
         writer_tx
-            .send(WriteCommand::Raw(message.payload.clone()))
+            .send(WriteCommand::Raw(batch.message.clone()))
             .await?;
 
         let client = reqwest::Client::new();
         let raw_tx_snap = raw_tx.clone();
         let snapshot_url_snap = snapshot_url.clone();
-        let symbols = message.symbols.clone();
+        let symbols = batch.symbols.clone();
 
         stream::iter(symbols)
             .map(Ok::<_, Box<dyn Error + Send + Sync + 'static>>)

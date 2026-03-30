@@ -120,7 +120,7 @@ impl From<&str> for Exchange {
 
 #[derive(Debug, Clone)]
 pub enum ExchangeStatus {
-    Initializing,
+    Initializing(f32),
     Running,
     Error(String)
 }
@@ -128,7 +128,7 @@ pub enum ExchangeStatus {
 impl fmt::Display for ExchangeStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ExchangeStatus::Initializing => write!(f, "Initializing"),
+            ExchangeStatus::Initializing(percentage) => write!(f, "Initializing: {:.2}%", percentage*100.0),
             ExchangeStatus::Running => write!(f, "Running"),
             ExchangeStatus::Error(error) => write!(f, "Error: {}", error)
         }

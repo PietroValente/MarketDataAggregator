@@ -10,7 +10,7 @@ use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{error, info};
 use url::Url;
 
-use crate::types::{ApiResponse, CoinbaseMdMsg, CoinbaseUrls, SubscriptionMsg, SymbolParam};
+use crate::types::{ApiResponse, CoinbaseMdMsg, CoinbaseUrls, SubscriptionMsg, Subscriptions, SymbolParam};
 
 pub struct CoinbaseConnector {
     manager_tx: Sender<ManagerCommand>,
@@ -32,7 +32,11 @@ impl CoinbaseConnector {
     {
         let (inbound_tx, inbound_rx) = channel::<InboundEvent>(4096);
         let ws_url = Arc::from(urls.ws);
-        let subscriptions_payloads = Arc::new(CoinbaseConnector::build_subscriptions(client, &urls.exchange_info, max_subscription_per_ws).await?);
+        let subscriptions = CoinbaseConnector::build_subscriptions(client, &urls.exchange_info, max_subscription_per_ws).await?;
+        let subscriptions_payloads = Arc::new(subscriptions.messages);
+        // raw_tx
+        //     .send(BitgetMdMsg::Instruments(subscriptions.symbols))
+        //     .await?;
 
         let (manager_tx, manager_rx) = channel::<ManagerCommand>(128);
 
@@ -58,7 +62,7 @@ impl CoinbaseConnector {
 }
 
 impl ExchangeConnector for CoinbaseConnector {
-    type SubscriptionPayload = Message;
+    type SubscriptionsInfo = Subscriptions;
 
     fn exchange() -> Exchange {
         Exchange::Coinbase
@@ -89,32 +93,36 @@ impl ExchangeConnector for CoinbaseConnector {
         Ok(list)
     }
 
-    async fn build_subscriptions(client:Client, rest_url: &Url, max_subscription_per_ws: usize) -> Result<Vec<Message>, Box<dyn Error + Send + Sync + 'static>>{
-        let mut list = CoinbaseConnector::get_subscriptions_list_backoff(client, rest_url).await;
-        let subscriptions_payloads_len = (list.len()/max_subscription_per_ws) + 1;
-        let mut result = Vec::new();
-        for i in 0..subscriptions_payloads_len {
-            let mut params_len = max_subscription_per_ws;
-            if i == subscriptions_payloads_len - 1 { 
-                params_len = list.len();
-            }
-            let product_ids: Vec<Instrument> = list
-                .drain(..params_len)
-                .collect();
-
+    async fn build_subscriptions(
+        client: Client,
+        rest_url: &Url,
+        max_subscription_per_ws: usize,
+    ) -> Result<Subscriptions, Box<dyn Error + Send + Sync + 'static>> {
+        if max_subscription_per_ws == 0 {
+            return Err("max_subscription_per_ws cannot be 0".into());
+        }
+    
+        let symbols = CoinbaseConnector::get_subscriptions_list_backoff(client, rest_url).await;
+        let mut messages = Vec::new();
+    
+        for chunk in symbols.chunks(max_subscription_per_ws) {
+            let product_ids: Vec<Instrument> = chunk.to_vec();
+    
             let sub_req = SubscriptionMsg {
                 op_type: String::from("subscribe"),
                 channels: vec![SymbolParam {
                     name: String::from("level2_50"),
-                    product_ids
-                }]
+                    product_ids,
+                }],
             };
-            let json = serde_json::to_string(&sub_req).expect("Failed to serialize SubscribePayload to JSON");
+    
+            let json = serde_json::to_string(&sub_req)?;
             let message = Message::text(json);
-
-            result.push( message );
+    
+            messages.push(message);
         }
-        Ok(result)
+    
+        Ok(Subscriptions { symbols, messages })
     }
 
     async fn subscribe_streams(&mut self) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
