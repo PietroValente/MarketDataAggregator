@@ -10,19 +10,12 @@ use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{error, info};
 use url::Url;
 
-use crate::types::{ApiResponse, OkxMdMsg, OkxUrls, SubscriptionRequest, Subscriptions, SymbolParam};
+use crate::types::{ApiResponse, ManagerCommand, OkxConnectorError, OkxMdMsg, OkxUrls, SubscriptionRequest, Subscriptions, SymbolParam};
 
 pub struct OkxConnector {
     manager_tx: Sender<ManagerCommand>,
     raw_tx: Sender<OkxMdMsg>,
     inbound_rx: Receiver<InboundEvent>
-}
-
-enum ManagerCommand {
-    InsertSubscription(u8, ConnectionTasks),
-    RecreateWithSnapshots,
-    RecreateFinished,
-    Pong(PingMsg)
 }
 
 impl OkxConnector {
@@ -34,9 +27,9 @@ impl OkxConnector {
         let ws_url = Arc::from(urls.ws);
         let subscriptions = OkxConnector::build_subscriptions(client, &urls.exchange_info, max_subscription_per_ws).await?;
         let subscriptions_payloads = Arc::new(subscriptions.messages);
-        // raw_tx
-        //     .send(BitgetMdMsg::Instruments(subscriptions.symbols))
-        //     .await?;
+        raw_tx
+            .send(OkxMdMsg::Instruments(subscriptions.symbols))
+            .await?;
 
         let (manager_tx, manager_rx) = channel::<ManagerCommand>(128);
 
@@ -93,13 +86,9 @@ impl ExchangeConnector for OkxConnector {
         Ok(list)
     }
 
-    async fn build_subscriptions(
-        client: Client,
-        rest_url: &Url,
-        max_subscription_per_ws: usize,
-    ) -> Result<Subscriptions, Box<dyn Error + Send + Sync + 'static>> {
+    async fn build_subscriptions(client: Client, rest_url: &Url, max_subscription_per_ws: usize) -> Result<Subscriptions, Box<dyn Error + Send + Sync + 'static>> {
         if max_subscription_per_ws == 0 {
-            return Err("max_subscription_per_ws cannot be 0".into());
+            return Err(OkxConnectorError::InvalidMaxSubscriptionPerWs.into());
         }
     
         let symbols = OkxConnector::get_subscriptions_list_backoff(client, rest_url).await;
@@ -152,7 +141,7 @@ impl ExchangeConnector for OkxConnector {
         while let Some(msg) = self.inbound_rx.recv().await {
             match msg {
                 InboundEvent::WsMessage(payload) => {
-                    if let Err(e) = self.raw_tx.send(OkxMdMsg(payload)).await {
+                    if let Err(e) = self.raw_tx.send(OkxMdMsg::Raw(payload)).await {
                         error!(exchange = ?Exchange::Okx, component = ?Component::Connector, error = ?e, "error while sending the ws message");
                         continue;
                     }
@@ -292,6 +281,14 @@ async fn recreate_with_snapshots(
     inbound_tx: Sender<InboundEvent>,
     cmd_tx: Sender<ManagerCommand>,
 ) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {    
+    if subscriptions_payloads.len() > (u8::MAX as usize) + 1 {
+        return Err(OkxConnectorError::TooManyWsBatchesForU8Id {
+            batches: subscriptions_payloads.len(),
+            max_supported: (u8::MAX as usize) + 1,
+        }
+        .into());
+    }
+
     for (i, message) in subscriptions_payloads.iter().enumerate() {
         let (writer_tx, writer_rx) = channel::<WriteCommand>(64);
         let (ws_stream, _) = connect_async(ws_url.as_str()).await?;
