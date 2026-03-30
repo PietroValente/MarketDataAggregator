@@ -8,19 +8,12 @@ use tokio::time::{sleep, Duration};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{error, info};
 use url::Url;
-use crate::types::{ApiResponse, BinanceMdMsg, BinanceUrls, DepthQuery, SnapshotMsg, SubscriptionBatch, SubscriptionRequest, Subscriptions};
+use crate::types::{ApiResponse, BinanceConnectorError, BinanceMdMsg, BinanceUrls, DepthQuery, ManagerCommand, SnapshotMsg, SubscriptionBatch, SubscriptionRequest, Subscriptions};
 
 pub struct BinanceConnector {
     manager_tx: Sender<ManagerCommand>,
     raw_tx: Sender<BinanceMdMsg>,
     inbound_rx: Receiver<InboundEvent>
-}
-
-enum ManagerCommand {
-    InsertSubscription(u8, ConnectionTasks),
-    RecreateWithSnapshots,
-    RecreateFinished,
-    Pong(PingMsg)
 }
 
 impl BinanceConnector {
@@ -95,13 +88,9 @@ impl ExchangeConnector for BinanceConnector {
         Ok(list)
     }
 
-    async fn build_subscriptions(
-        client: Client,
-        rest_url: &Url,
-        max_subscription_per_ws: usize,
-    ) -> Result<Subscriptions, Box<dyn Error + Send + Sync + 'static>> {
+    async fn build_subscriptions(client: Client, rest_url: &Url, max_subscription_per_ws: usize) -> Result<Subscriptions, Box<dyn Error + Send + Sync + 'static>> {
         if max_subscription_per_ws == 0 {
-            return Err("max_subscription_per_ws cannot be 0".into());
+            return Err(BinanceConnectorError::InvalidMaxSubscriptionPerWs.into());
         }
     
         let symbols = BinanceConnector::get_subscriptions_list_backoff(client, rest_url).await;
@@ -198,8 +187,7 @@ async fn control_manager_task(mut control_rx: Receiver<ControlEvent>, manager_tx
     }
 }
 
-async fn connection_manager_task(
-    ws_url: Arc<Url>,
+async fn connection_manager_task( ws_url: Arc<Url>,
     snapshot_url: Arc<Url>,
     batches_payloads: Arc<Vec<SubscriptionBatch>>,
     inbound_tx: Sender<InboundEvent>,
@@ -310,6 +298,14 @@ async fn recreate_with_snapshots(
     raw_tx: Sender<BinanceMdMsg>,
     cmd_tx: Sender<ManagerCommand>
 ) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
+    if batches_payloads.len() > (u8::MAX as usize) + 1 {
+        return Err(BinanceConnectorError::TooManyWsBatchesForU8Id {
+            batches: batches_payloads.len(),
+            max_supported: (u8::MAX as usize) + 1,
+        }
+        .into());
+    }
+
     for (i, batch) in batches_payloads.iter().enumerate() {
         let (writer_tx, writer_rx) = channel::<WriteCommand>(64);
         let (ws_stream, _) = connect_async(ws_url.as_str()).await?;
@@ -360,7 +356,8 @@ async fn recreate_with_snapshots(
                         .get(snapshot_url.as_str())
                         .query(&params)
                         .send()
-                        .await?;
+                        .await?
+                        .error_for_status()?;
 
                     let bytes = response.bytes().await?;
 

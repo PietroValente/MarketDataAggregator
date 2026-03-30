@@ -76,15 +76,13 @@ impl BinanceAdapter {
         let Some(book) = self.book_states.get_mut(&payload.symbol) else {
             return Err(ValidateBookError::InstrumentNotFound(payload.symbol.clone()));
         };
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64;
+        if let Ok(elapsed) = SystemTime::now().duration_since(UNIX_EPOCH) {
+            let now = elapsed.as_millis() as u64;
+            let latency = now.saturating_sub(payload.event_time);
 
-        let latency = now.saturating_sub(payload.event_time);
-
-        if latency > 1000 {
-            warn!(exchange = ?Exchange::Binance, component = ?Component::Adapter, symbol = ?payload.symbol, "high latency for update: {} ms", latency);
+            if latency > 1000 {
+                warn!(exchange = ?Exchange::Binance, component = ?Component::Adapter, symbol = ?payload.symbol, "high latency for update: {} ms", latency);
+            }
         }
 
         let Some(last_applied_update_id) = book.last_applied_update_id else {
@@ -119,7 +117,8 @@ impl BinanceAdapter {
                 },
                 BinanceMdMsg::Snapshot(payload) => {
                     let Ok(parsed_snapshot) = serde_json::from_slice::<ParsedBookSnapshot>(&payload.payload) else {
-                        error!(exchange = ?Exchange::Binance, component = ?Component::Adapter, symbol = ?payload.symbol, text = ?String::from_utf8(payload.payload.clone()).unwrap(), "error while parsing snapshot");
+                        let text = String::from_utf8_lossy(&payload.payload);
+                        error!(exchange = ?Exchange::Binance, component = ?Component::Adapter, symbol = ?payload.symbol, text = ?text, "error while parsing snapshot");
                         continue;
                     };
                     if let Err(e) = self.validate_snapshot(&ValidateSnapshot{
@@ -150,7 +149,10 @@ impl BinanceAdapter {
                     }
 
                     self.drain_buffered_updates(payload.symbol);
-                    let mut status = ExchangeStatus::Initializing(self.live_books as f32/self.book_states.len() as f32);
+                    let mut status = ExchangeStatus::Initializing(0.0);
+                    if !self.book_states.is_empty() {
+                        status = ExchangeStatus::Initializing(self.live_books as f32 / self.book_states.len() as f32);
+                    }
                     if self.live_books == self.book_states.len() && !self.book_states.is_empty() {
                         status = ExchangeStatus::Running;
                     }

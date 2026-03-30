@@ -1,31 +1,42 @@
-use md_core::types::{Instrument, Price, Qty, RawMdMsg};
+use std::str::FromStr;
+
+use md_core::{
+    connector_trait::ConnectionTasks,
+    events::PingMsg,
+    types::{Instrument, Price, Qty, RawMdMsg},
+};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Deserializer, Serialize};
 use thiserror::Error;
 use tokio_tungstenite::tungstenite::Message;
 use url::Url;
-use std::str::FromStr;
 
-#[derive(Debug, PartialEq)]
-pub enum BookSyncStatus {
-    WaitingSnapshot,
-    Live
+/* Connector commands and transport messages */
+
+pub enum ManagerCommand {
+    InsertSubscription(u8, ConnectionTasks),
+    RecreateWithSnapshots,
+    RecreateFinished,
+    Pong(PingMsg),
 }
 
-pub struct BookState {
-    pub status: BookSyncStatus,
-    pub last_applied_update_id: Option<u64>,
-    pub symbols_pending_snapshot: Vec<RawMdMsg>
+pub enum BinanceMdMsg {
+    Instruments(Vec<Instrument>),
+    Snapshot(SnapshotMsg),
+    WsMessage(RawMdMsg),
 }
 
-impl BookState {
-    pub fn new() -> Self {
-        Self {
-            status: BookSyncStatus::WaitingSnapshot,
-            last_applied_update_id: None,
-            symbols_pending_snapshot: Vec::new()
-        }
-    }
+pub struct SnapshotMsg {
+    pub symbol: Instrument,
+    pub payload: RawMdMsg,
+}
+
+/* Connector/API configuration and subscription payloads */
+
+pub struct BinanceUrls {
+    pub exchange_info: Url,
+    pub snapshot: Url,
+    pub ws: Url,
 }
 
 #[derive(Deserialize)]
@@ -36,31 +47,7 @@ pub struct ApiResponse {
 #[derive(Deserialize)]
 pub struct SymbolInfo {
     pub symbol: Instrument,
-    pub status: String
-}
-
-#[derive(Debug, Serialize)]
-pub struct SubscriptionRequest {
-    pub method: String,
-    pub params: Vec<String>,
-    pub id: i64
-}
-
-pub struct BinanceUrls {
-    pub exchange_info: Url,
-    pub snapshot: Url,
-    pub ws: Url,
-}
-
-pub struct SnapshotMsg {
-    pub symbol: Instrument,
-    pub payload: RawMdMsg
-}
-
-pub enum BinanceMdMsg {
-    Instruments(Vec<Instrument>),
-    Snapshot(SnapshotMsg),
-    WsMessage(RawMdMsg)
+    pub status: String,
 }
 
 #[derive(Clone)]
@@ -76,51 +63,60 @@ pub struct SubscriptionBatch {
 }
 
 #[derive(Debug, Serialize)]
+pub struct SubscriptionRequest {
+    pub method: String,
+    pub params: Vec<String>,
+    pub id: i64,
+}
+
+#[derive(Debug, Serialize)]
 pub struct DepthQuery<'a> {
     pub symbol: &'a str,
     pub limit: u32,
 }
 
+/* Book state and sync flow */
+
+#[derive(Debug, PartialEq)]
+pub enum BookSyncStatus {
+    WaitingSnapshot,
+    Live,
+}
+
+pub struct BookState {
+    pub status: BookSyncStatus,
+    pub last_applied_update_id: Option<u64>,
+    pub symbols_pending_snapshot: Vec<RawMdMsg>,
+}
+
+impl BookState {
+    pub fn new() -> Self {
+        Self {
+            status: BookSyncStatus::WaitingSnapshot,
+            last_applied_update_id: None,
+            symbols_pending_snapshot: Vec::new(),
+        }
+    }
+}
+
+pub struct ValidateSnapshot {
+    pub symbol: Instrument,
+    pub last_update_id: u64,
+}
+
+/* Incoming websocket payloads */
+
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 pub enum WsMessage {
     Confirmation(SubscriptionConfirmation),
-    Update(ParsedBookUpdate)
+    Update(ParsedBookUpdate),
 }
 
 #[derive(Debug, Deserialize)]
 pub struct SubscriptionConfirmation {
     pub result: Option<serde_json::Value>,
     pub id: u64,
-}
-
-pub struct ValidateSnapshot {
-    pub symbol: Instrument,
-    pub last_update_id: u64
-}
-
-#[derive(Error, Debug)]
-pub enum ValidateBookError {
-    #[error("Instrument not found: {0}")]
-    InstrumentNotFound(Instrument),
-
-    #[error("Unknown type of event: {0}")]
-    UnknownType(String),
-
-    #[error("Stale update: event last_update_id={event_last_update_id} <= book last_applied_update_id={book_last_update_id}")]
-    StaleUpdate {
-        event_last_update_id: u64,
-        book_last_update_id: u64,
-    },
-
-    #[error("Update gap detected: event first_update_id={event_first_update_id} > expected={expected_next_update_id}")]
-    UpdateGap {
-        event_first_update_id: u64,
-        expected_next_update_id: u64,
-    },
-
-    #[error("Cannot apply update: last_applied_update_id is None (book not initialized with snapshot)")]
-    MissingSnapshot
 }
 
 #[derive(Debug, Deserialize)]
@@ -158,6 +154,46 @@ pub struct ParsedBookSnapshot {
     #[serde(deserialize_with = "deserialize_levels")]
     pub asks: Vec<(Price, Qty)>,
 }
+
+/* Error types */
+
+#[derive(Error, Debug)]
+pub enum ValidateBookError {
+    #[error("Instrument not found: {0}")]
+    InstrumentNotFound(Instrument),
+
+    #[error("Unknown type of event: {0}")]
+    UnknownType(String),
+
+    #[error("Stale update: event last_update_id={event_last_update_id} <= book last_applied_update_id={book_last_update_id}")]
+    StaleUpdate {
+        event_last_update_id: u64,
+        book_last_update_id: u64,
+    },
+
+    #[error("Update gap detected: event first_update_id={event_first_update_id} > expected={expected_next_update_id}")]
+    UpdateGap {
+        event_first_update_id: u64,
+        expected_next_update_id: u64,
+    },
+
+    #[error("Cannot apply update: last_applied_update_id is None (book not initialized with snapshot)")]
+    MissingSnapshot,
+}
+
+#[derive(Error, Debug)]
+pub enum BinanceConnectorError {
+    #[error("max_subscription_per_ws cannot be 0")]
+    InvalidMaxSubscriptionPerWs,
+
+    #[error("too many websocket batches for u8 ws_id: got {batches}, max {max_supported}")]
+    TooManyWsBatchesForU8Id {
+        batches: usize,
+        max_supported: usize,
+    },
+}
+
+/* Shared deserializer helpers */
 
 fn deserialize_levels<'de, D>(deserializer: D) -> Result<Vec<(Price, Qty)>, D::Error>
 where
