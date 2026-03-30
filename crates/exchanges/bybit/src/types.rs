@@ -1,23 +1,33 @@
 use md_core::types::{Instrument, Price, Qty, RawMdMsg};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Deserializer, Serialize};
+use thiserror::Error;
 use tokio_tungstenite::tungstenite::Message;
 use url::Url;
-use std::{ops::Deref, str::FromStr};
+use std::str::FromStr;
+
+pub struct BookState {
+    pub initialized: bool,
+    pub last_update_id: Option<u64>
+}
+
+impl BookState {
+    pub fn new() -> Self {
+        Self {
+            initialized: false,
+            last_update_id: None
+        }
+    }
+}
 
 pub struct BybitUrls {
     pub exchange_info: Url,
     pub ws: Url,
 }
 
-pub struct BybitMdMsg(pub RawMdMsg);
-
-impl Deref for BybitMdMsg {
-    type Target = RawMdMsg;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
+pub enum BybitMdMsg {
+    Instruments(Vec<Instrument>),
+    Raw(RawMdMsg)
 }
 
 #[derive(Clone)]
@@ -75,7 +85,7 @@ pub struct ParsedBookMessage {
     pub data: ParsedBookData
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, PartialEq, Clone, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum DepthBookAction {
     Snapshot,
@@ -85,7 +95,7 @@ pub enum DepthBookAction {
 #[derive(Debug, Deserialize)]
 pub struct ParsedBookData {
     #[serde(rename = "s")]
-    pub symbol: String,
+    pub symbol: Instrument,
 
     #[serde(rename = "b", deserialize_with = "deserialize_levels")]
     pub bids: Vec<(Price, Qty)>,
@@ -114,4 +124,25 @@ where
             Ok((Price(price), Qty(qty)))
         })
         .collect()
+}
+
+#[derive(Debug, Error)]
+pub enum ValidateBookError {
+    #[error("Invalid action for snapshot")]
+    InvalidSnapshotAction,
+
+    #[error("Invalid action for delta")]
+    InvalidDeltaAction,
+
+    #[error("Instrument not found: {0}")]
+    InstrumentNotFound(Instrument),
+
+    #[error("Missing snapshot for this instrument")]
+    MissingSnapshot,
+
+    #[error("Stale update: event update_id={new_update_id} <= book update_id={last_update_id}")]
+    StaleUpdate {
+        new_update_id: u64,
+        last_update_id: u64,
+    }
 }

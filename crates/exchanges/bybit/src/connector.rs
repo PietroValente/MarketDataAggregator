@@ -34,9 +34,9 @@ impl BybitConnector {
         let ws_url = Arc::from(urls.ws);
         let subscriptions = BybitConnector::build_subscriptions(client, &urls.exchange_info, max_subscription_per_ws).await?;
         let subscriptions_payloads = Arc::new(subscriptions.messages);
-        // raw_tx
-        //     .send(BitgetMdMsg::Instruments(subscriptions.symbols))
-        //     .await?;
+        raw_tx
+            .send(BybitMdMsg::Instruments(subscriptions.symbols))
+            .await?;
 
         let (manager_tx, manager_rx) = channel::<ManagerCommand>(128);
 
@@ -152,7 +152,7 @@ impl ExchangeConnector for BybitConnector {
         while let Some(msg) = self.inbound_rx.recv().await {
             match msg {
                 InboundEvent::WsMessage(payload) => {
-                    if let Err(e) = self.raw_tx.send(BybitMdMsg(payload)).await {
+                    if let Err(e) = self.raw_tx.send(BybitMdMsg::Raw(payload)).await {
                         error!(exchange = ?Exchange::Bybit, component = ?Component::Connector, error = ?e, "error while sending the ws message");
                         continue;
                     }

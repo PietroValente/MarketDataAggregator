@@ -135,7 +135,10 @@ pub enum ValidateBookError {
     #[error("Missing book data in payload")]
     MissingBookData,
 
-    #[error("Stale update: event seq={new_seq} <= book last_seq={last_seq}")]
+    #[error("Missing snapshot for this instrument")]
+    MissingSnapshot,
+
+    #[error("Stale update: event seq={new_seq} <= book seq={last_seq}")]
     StaleUpdate {
         new_seq: u64,
         last_seq: u64,

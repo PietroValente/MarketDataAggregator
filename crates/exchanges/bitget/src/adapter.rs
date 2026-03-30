@@ -30,6 +30,13 @@ impl BitgetAdapter {
         }
     }
 
+    fn clear_book_state(&mut self) {
+        for (_, book) in &mut self.book_states {
+            book.last_seq = None;
+        }
+        self.live_books = 0;
+    }
+
     fn validate_snapshot(&mut self, payload: &ParsedBookMessage) -> Result<(), ValidateBookError> {
         if payload.action != DepthBookAction::Snapshot {
             return Err(ValidateBookError::InvalidSnapshotAction);
@@ -65,13 +72,18 @@ impl BitgetAdapter {
         if latency > 1000 {
             warn!(exchange = ?Exchange::Bitget, component = ?Component::Adapter, symbol = ?payload.arg.inst_id, "high latency for update: {} ms", latency);
         }
-        
-        if let Some(last_seq) = book.last_seq {
-            if book_data.seq <= last_seq {
-                return Err(ValidateBookError::StaleUpdate { new_seq: book_data.seq, last_seq });
+
+        match book.last_seq {
+            Some(last_seq) => {
+                if book_data.seq <= last_seq {
+                    return Err(ValidateBookError::StaleUpdate { new_seq: book_data.seq, last_seq });
+                }
+                book.last_seq = Some(book_data.seq);
+            },
+            None => {
+                return Err(ValidateBookError::MissingSnapshot)
             }
-        }
-        book.last_seq = Some(book_data.seq);
+        }        
         Ok(())
     }
 
@@ -107,7 +119,7 @@ impl BitgetAdapter {
                                 DepthBookAction::Snapshot => {
                                     if let Err(e) = self.validate_snapshot(&depth) {
                                         error!(exchange = ?Exchange::Bitget, component = ?Component::Adapter, symbol = ?inst_id, error = ?e, "error while validating snapshot");
-                                        self.live_books = 0;
+                                        self.clear_book_state();
                                         if let Err(e) = self.control_tx.blocking_send(ControlEvent::Resync) {
                                             error!(exchange = ?Exchange::Bitget, component = ?Component::Adapter, error = ?e, "error while sending resync");
                                         }
@@ -146,7 +158,7 @@ impl BitgetAdapter {
                                     match self.validate_update(&depth) {
                                         Err(e @ ValidateBookError::StaleUpdate { new_seq: _, last_seq: _ }) => {
                                             error!(
-                                                exchange = ?Exchange::Binance,
+                                                exchange = ?Exchange::Bitget,
                                                 component = ?Component::Adapter,
                                                 symbol = ?depth.arg.inst_id,
                                                 error = ?e,
@@ -156,7 +168,7 @@ impl BitgetAdapter {
                                         },
                                         Err(e) => {
                                             error!(exchange = ?Exchange::Bitget, component = ?Component::Adapter, symbol = ?inst_id, error = ?e, "error while validating snapshot");
-                                            self.live_books = 0;
+                                            self.clear_book_state();
                                             if let Err(e) = self.control_tx.blocking_send(ControlEvent::Resync) {
                                                 error!(exchange = ?Exchange::Bitget, component = ?Component::Adapter, error = ?e, "error while sending resync");
                                             }
