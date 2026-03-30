@@ -32,6 +32,7 @@ impl BitgetAdapter {
 
     fn clear_book_state(&mut self) {
         for (_, book) in &mut self.book_states {
+            book.initialized = false;
             book.last_seq = None;
         }
         self.live_books = 0;
@@ -47,6 +48,10 @@ impl BitgetAdapter {
         let Some(book_data) = payload.data.last() else {
             return Err(ValidateBookError::MissingBookData);
         };
+        if !book.initialized {
+            book.initialized = true;
+            self.live_books += 1;
+        }
         book.last_seq = Some(book_data.seq);
         Ok(())
     }
@@ -62,15 +67,13 @@ impl BitgetAdapter {
             return Err(ValidateBookError::MissingBookData);
         };
 
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64;
+        if let Ok(elapsed) = SystemTime::now().duration_since(UNIX_EPOCH) {
+            let now = elapsed.as_millis() as u64;
+            let latency = now.saturating_sub(book_data.ts.parse::<u64>().unwrap_or(0));
 
-        let latency = now.saturating_sub(book_data.ts.parse::<u64>().unwrap_or(0));
-
-        if latency > 1000 {
-            warn!(exchange = ?Exchange::Bitget, component = ?Component::Adapter, symbol = ?payload.arg.inst_id, "high latency for update: {} ms", latency);
+            if latency > 1000 {
+                warn!(exchange = ?Exchange::Bitget, component = ?Component::Adapter, symbol = ?payload.arg.inst_id, "high latency for update: {} ms", latency);
+            }
         }
 
         match book.last_seq {
@@ -78,12 +81,12 @@ impl BitgetAdapter {
                 if book_data.seq <= last_seq {
                     return Err(ValidateBookError::StaleUpdate { new_seq: book_data.seq, last_seq });
                 }
-                book.last_seq = Some(book_data.seq);
             },
             None => {
                 return Err(ValidateBookError::MissingSnapshot)
             }
-        }        
+        }
+        book.last_seq = Some(book_data.seq);
         Ok(())
     }
 
@@ -141,8 +144,10 @@ impl BitgetAdapter {
                                             error!(exchange = ?Exchange::Bitget, component = ?Component::Adapter, error = ?e, "error while sending snapshot event");
                                         }
                                     }
-                                    self.live_books += 1;
-                                    let mut status = ExchangeStatus::Initializing(self.live_books as f32/self.book_states.len() as f32);
+                                    let mut status = ExchangeStatus::Initializing(0.0);
+                                    if !self.book_states.is_empty() {
+                                        status = ExchangeStatus::Initializing(self.live_books as f32 / self.book_states.len() as f32);
+                                    }
                                     if self.live_books == self.book_states.len() && !self.book_states.is_empty() {
                                         status = ExchangeStatus::Running;
                                     }
