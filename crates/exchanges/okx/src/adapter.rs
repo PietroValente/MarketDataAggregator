@@ -73,11 +73,11 @@ impl OkxAdapter {
         let event_prev_seq_id = book_data.prev_seq_id as u64;
         match book.prev_seq_id {
             Some(prev_seq_id) => {
-                if event_prev_seq_id != prev_seq_id {
-                    return Err(ValidateBookError::UpdateGap { event_prev_seq_id, expected_prev_seq_id: prev_seq_id});
-                }
                 if event_prev_seq_id < prev_seq_id {
                     return Err(ValidateBookError::StaleUpdate { event_prev_seq_id, book_prev_seq_id: prev_seq_id });
+                }
+                if event_prev_seq_id > prev_seq_id {
+                    return Err(ValidateBookError::UpdateGap { event_prev_seq_id, expected_prev_seq_id: prev_seq_id});
                 }
             },
             None => {
@@ -170,7 +170,7 @@ impl OkxAdapter {
                                             continue;
                                         },
                                         Err(e) => {
-                                            error!(exchange = ?Exchange::Okx, component = ?Component::Adapter, symbol = ?inst_id, error = ?e, "error while validating snapshot");
+                                            error!(exchange = ?Exchange::Okx, component = ?Component::Adapter, symbol = ?inst_id, error = ?e, "error while validating update");
                                             self.clear_book_state();
                                             if let Err(e) = self.control_tx.blocking_send(ControlEvent::Resync) {
                                                 error!(exchange = ?Exchange::Okx, component = ?Component::Adapter, error = ?e, "error while sending resync");

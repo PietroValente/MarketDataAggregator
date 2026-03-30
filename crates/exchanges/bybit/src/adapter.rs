@@ -66,7 +66,7 @@ impl BybitAdapter {
             let latency = now.saturating_sub(payload.cts);
 
             if latency > 1000 {
-                warn!(exchange = ?Exchange::Bybit, component = ?Component::Adapter, symbol = ?payload.data.update_id, "high latency for update: {} ms", latency);
+                warn!(exchange = ?Exchange::Bybit, component = ?Component::Adapter, symbol = ?payload.data.symbol, "high latency for update: {} ms", latency);
             }
         }
 
@@ -164,7 +164,7 @@ impl BybitAdapter {
                                             continue;
                                         },
                                         Err(e) => {
-                                            error!(exchange = ?Exchange::Bybit, component = ?Component::Adapter, symbol = ?depth.data.symbol, error = ?e, "error while validating snapshot");
+                                            error!(exchange = ?Exchange::Bybit, component = ?Component::Adapter, symbol = ?depth.data.symbol, error = ?e, "error while validating update");
                                             self.clear_book_state();
                                             if let Err(e) = self.control_tx.blocking_send(ControlEvent::Resync) {
                                                 error!(exchange = ?Exchange::Bybit, component = ?Component::Adapter, error = ?e, "error while sending resync");

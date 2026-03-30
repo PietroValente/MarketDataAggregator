@@ -137,7 +137,7 @@ impl CoinbaseAdapter {
                         Ok(WsMessage::Update(depth)) => {
                             let inst_id = depth.product_id.replace("-", "");
                             if let Err(e) = self.validate_update(&depth) {
-                                error!(exchange = ?Exchange::Coinbase, component = ?Component::Adapter, error = ?e, "error while validating snapshot");
+                                error!(exchange = ?Exchange::Coinbase, component = ?Component::Adapter, error = ?e, "error while validating update");
                                 if let Err(e) = self.control_tx.blocking_send(ControlEvent::Resync) {
                                     error!(exchange = ?Exchange::Coinbase, component = ?Component::Adapter, error = ?e, "error while sending resync");
                                 }

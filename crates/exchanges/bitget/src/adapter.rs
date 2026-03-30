@@ -172,7 +172,7 @@ impl BitgetAdapter {
                                             continue;
                                         },
                                         Err(e) => {
-                                            error!(exchange = ?Exchange::Bitget, component = ?Component::Adapter, symbol = ?inst_id, error = ?e, "error while validating snapshot");
+                                            error!(exchange = ?Exchange::Bitget, component = ?Component::Adapter, symbol = ?inst_id, error = ?e, "error while validating update");
                                             self.clear_book_state();
                                             if let Err(e) = self.control_tx.blocking_send(ControlEvent::Resync) {
                                                 error!(exchange = ?Exchange::Bitget, component = ?Component::Adapter, error = ?e, "error while sending resync");
