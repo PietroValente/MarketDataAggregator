@@ -1,6 +1,6 @@
 use std::error::Error;
 
-use crate::types::Exchange;
+use crate::{logging::types::Component, types::Exchange};
 
 /// Common interface for exchange-specific adapters.
 ///
@@ -11,7 +11,11 @@ pub trait ExchangeAdapter {
     type SnapshotPayload;
     type UpdatePayload;
 
-    fn exchange(&self) -> Exchange;
+    fn exchange() -> Exchange;
+
+    fn component() -> Component {
+        Component::Adapter
+    }
 
     /// Validate a parsed snapshot payload.
     fn validate_snapshot(&mut self, payload: &Self::SnapshotPayload) -> Result<(), Box<dyn Error + Send + Sync + 'static>>;

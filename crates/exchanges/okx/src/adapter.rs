@@ -5,7 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use md_core::adapter_trait::ExchangeAdapter;
 use md_core::events::ControlEvent;
 use md_core::types::ExchangeStatus;
-use md_core::{book::BookLevels, events::{BookEventType, EventEnvelope, NormalizedBookData, NormalizedEvent}, logging::types::Component, types::{Exchange, Instrument}};
+use md_core::{book::BookLevels, events::{BookEventType, EventEnvelope, NormalizedBookData, NormalizedEvent}, types::{Exchange, Instrument}};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tracing::{error, warn};
 
@@ -36,6 +36,15 @@ impl OkxAdapter {
             book.prev_seq_id = None;
         }
         self.live_books = 0;
+
+        let status = ExchangeStatus::Initializing(0.0);
+        let event_envelope = EventEnvelope {
+            exchange: OkxAdapter::exchange(),
+            event: NormalizedEvent::ApplyStatus(status)
+        };
+        if let Err(e) = self.normalized_tx.blocking_send(event_envelope) {
+            error!(exchange = ?OkxAdapter::exchange(), component = ?OkxAdapter::component(), error = ?e, "error while sending running status event");
+        }
     }
 
     fn validate_snapshot(&mut self, payload: &ParsedBookMessage) -> Result<(), ValidateBookError> {
@@ -66,7 +75,7 @@ impl OkxAdapter {
             let latency = now.saturating_sub(book_data.ts.parse::<u64>().unwrap_or(0));
 
             if latency > 1000 {
-                warn!(exchange = ?Exchange::Okx, component = ?Component::Adapter, symbol = ?payload.arg.inst_id, "high latency for update: {} ms", latency);
+                warn!(exchange = ?OkxAdapter::exchange(), component = ?OkxAdapter::component(), symbol = ?payload.arg.inst_id, "high latency for update: {} ms", latency);
             }
         }
 
@@ -96,11 +105,11 @@ impl OkxAdapter {
                         self.book_states.insert(i.clone(), BookState::new());
                     }
                     let event_envelope = EventEnvelope {
-                        exchange: Exchange::Okx,
+                        exchange: OkxAdapter::exchange(),
                         event: NormalizedEvent::ApplyStatus(ExchangeStatus::Initializing(0.0))
                     };
                     if let Err(e) = self.normalized_tx.blocking_send(event_envelope) {
-                        error!(exchange = ?Exchange::Okx, component = ?Component::Adapter, error = ?e, "error while sending running status event");
+                        error!(exchange = ?OkxAdapter::exchange(), component = ?OkxAdapter::component(), error = ?e, "error while sending running status event");
                     }
                 },
                 OkxMdMsg::Raw(msg) => {
@@ -110,7 +119,7 @@ impl OkxAdapter {
                         },
                         Err(_) => {
                             let text = String::from_utf8_lossy(&msg);
-                            error!(exchange = ?Exchange::Okx, component = ?Component::Adapter, text = ?text, "error while parsing update");
+                            error!(exchange = ?OkxAdapter::exchange(), component = ?OkxAdapter::component(), text = ?text, "error while parsing update");
                         },
                         Ok(WsMessage::Depth(depth)) => {
                             let inst_id = depth.arg.inst_id.replace("-", "");
@@ -119,10 +128,10 @@ impl OkxAdapter {
                             match action {
                                 DepthBookAction::Snapshot => {
                                     if let Err(e) = self.validate_snapshot(&depth) {
-                                        error!(exchange = ?Exchange::Okx, component = ?Component::Adapter, error = ?e, "error while validating snapshot");
+                                        error!(exchange = ?OkxAdapter::exchange(), component = ?OkxAdapter::component(), error = ?e, "error while validating snapshot");
                                         self.clear_book_state();
                                         if let Err(e) = self.control_tx.blocking_send(ControlEvent::Resync) {
-                                            error!(exchange = ?Exchange::Okx, component = ?Component::Adapter, error = ?e, "error while sending resync");
+                                            error!(exchange = ?OkxAdapter::exchange(), component = ?OkxAdapter::component(), error = ?e, "error while sending resync");
                                         }
                                     }
                                     for data in depth.data {
@@ -134,12 +143,12 @@ impl OkxAdapter {
                                             }
                                         });
                                         let event_envelope = EventEnvelope {
-                                            exchange: Exchange::Okx,
+                                            exchange: OkxAdapter::exchange(),
                                             event: snapshot_event
                                         };
                     
                                         if let Err(e) = self.normalized_tx.blocking_send(event_envelope) {
-                                            error!(exchange = ?Exchange::Okx, component = ?Component::Adapter, error = ?e, "error while sending snapshot event");
+                                            error!(exchange = ?OkxAdapter::exchange(), component = ?OkxAdapter::component(), error = ?e, "error while sending snapshot event");
                                         }
                                     }
                                     let mut status = ExchangeStatus::Initializing(0.0);
@@ -150,19 +159,19 @@ impl OkxAdapter {
                                         status = ExchangeStatus::Running;
                                     }
                                     let event_envelope = EventEnvelope {
-                                        exchange: Exchange::Okx,
+                                        exchange: OkxAdapter::exchange(),
                                         event: NormalizedEvent::ApplyStatus(status)
                                     };
                                     if let Err(e) = self.normalized_tx.blocking_send(event_envelope) {
-                                        error!(exchange = ?Exchange::Okx, component = ?Component::Adapter, error = ?e, "error while sending running status event");
+                                        error!(exchange = ?OkxAdapter::exchange(), component = ?OkxAdapter::component(), error = ?e, "error while sending running status event");
                                     }
                                 },
                                 DepthBookAction::Update => {
                                     match self.validate_update(&depth) {
                                         Err(e @ ValidateBookError::StaleUpdate { event_prev_seq_id: _, book_prev_seq_id: _ }) => {
                                             error!(
-                                                exchange = ?Exchange::Okx,
-                                                component = ?Component::Adapter,
+                                                exchange = ?OkxAdapter::exchange(),
+                                                component = ?OkxAdapter::component(),
                                                 symbol = ?depth.arg.inst_id,
                                                 error = ?e,
                                                 "error while validating update"
@@ -170,10 +179,10 @@ impl OkxAdapter {
                                             continue;
                                         },
                                         Err(e) => {
-                                            error!(exchange = ?Exchange::Okx, component = ?Component::Adapter, symbol = ?inst_id, error = ?e, "error while validating update");
+                                            error!(exchange = ?OkxAdapter::exchange(), component = ?OkxAdapter::component(), symbol = ?inst_id, error = ?e, "error while validating update");
                                             self.clear_book_state();
                                             if let Err(e) = self.control_tx.blocking_send(ControlEvent::Resync) {
-                                                error!(exchange = ?Exchange::Okx, component = ?Component::Adapter, error = ?e, "error while sending resync");
+                                                error!(exchange = ?OkxAdapter::exchange(), component = ?OkxAdapter::component(), error = ?e, "error while sending resync");
                                             }
                                         },
                                         Ok(()) => {}
@@ -187,12 +196,12 @@ impl OkxAdapter {
                                             }
                                         });
                                         let event_envelope = EventEnvelope {
-                                            exchange: Exchange::Okx,
+                                            exchange: OkxAdapter::exchange(),
                                             event: snapshot_event
                                         };
                     
                                         if let Err(e) = self.normalized_tx.blocking_send(event_envelope) {
-                                            error!(exchange = ?Exchange::Okx, component = ?Component::Adapter, error = ?e, "error while sending snapshot event");
+                                            error!(exchange = ?OkxAdapter::exchange(), component = ?OkxAdapter::component(), error = ?e, "error while sending snapshot event");
                                         }
                                     }
                                 }
@@ -209,7 +218,7 @@ impl ExchangeAdapter for OkxAdapter {
     type SnapshotPayload = ParsedBookMessage;
     type UpdatePayload = ParsedBookMessage;
 
-    fn exchange(&self) -> Exchange {
+    fn exchange() -> Exchange {
         Exchange::Okx
     }
 

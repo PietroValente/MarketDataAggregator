@@ -5,7 +5,7 @@ use chrono::DateTime;
 use md_core::adapter_trait::ExchangeAdapter;
 use md_core::events::ControlEvent;
 use md_core::types::ExchangeStatus;
-use md_core::{book::BookLevels, events::{BookEventType, EventEnvelope, NormalizedBookData, NormalizedEvent}, logging::types::Component, types::{Exchange, Instrument}};
+use md_core::{book::BookLevels, events::{BookEventType, EventEnvelope, NormalizedBookData, NormalizedEvent}, types::{Exchange, Instrument}};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tracing::{error, warn};
 use crate::types::{BookState, CoinbaseMdMsg, ParsedBookSnapshot, ParsedBookUpdate, Side, ValidateBookError, WsMessage};
@@ -34,6 +34,15 @@ impl CoinbaseAdapter {
             book.initialized = false;
         }
         self.live_books = 0;
+        
+        let status = ExchangeStatus::Initializing(0.0);
+        let event_envelope = EventEnvelope {
+            exchange: CoinbaseAdapter::exchange(),
+            event: NormalizedEvent::ApplyStatus(status)
+        };
+        if let Err(e) = self.normalized_tx.blocking_send(event_envelope) {
+            error!(exchange = ?CoinbaseAdapter::exchange(), component = ?CoinbaseAdapter::component(), error = ?e, "error while sending running status event");
+        }
     }
 
     fn validate_snapshot(&mut self, payload: &ParsedBookSnapshot) -> Result<(), ValidateBookError> {
@@ -60,7 +69,7 @@ impl CoinbaseAdapter {
             let latency = now.saturating_sub(payload_ms);
 
             if latency > 1000 {
-                warn!(exchange = ?Exchange::Coinbase, component = ?Component::Adapter, symbol = ?payload.product_id, "high latency for update: {} ms", latency);
+                warn!(exchange = ?CoinbaseAdapter::exchange(), component = ?CoinbaseAdapter::component(), symbol = ?payload.product_id, "high latency for update: {} ms", latency);
             }
         }
 
@@ -78,11 +87,11 @@ impl CoinbaseAdapter {
                         self.book_states.insert(i.clone(), BookState::new());
                     }
                     let event_envelope = EventEnvelope {
-                        exchange: Exchange::Coinbase,
+                        exchange: CoinbaseAdapter::exchange(),
                         event: NormalizedEvent::ApplyStatus(ExchangeStatus::Initializing(0.0))
                     };
                     if let Err(e) = self.normalized_tx.blocking_send(event_envelope) {
-                        error!(exchange = ?Exchange::Coinbase, component = ?Component::Adapter, error = ?e, "error while sending running status event");
+                        error!(exchange = ?CoinbaseAdapter::exchange(), component = ?CoinbaseAdapter::component(), error = ?e, "error while sending running status event");
                     }
                 },
                 CoinbaseMdMsg::Raw(msg) => {
@@ -92,15 +101,15 @@ impl CoinbaseAdapter {
                         },
                         Err(_) => {
                             let text = String::from_utf8_lossy(&msg);
-                            error!(exchange = ?Exchange::Coinbase, component = ?Component::Adapter, text = ?text, "error while parsing update");
+                            error!(exchange = ?CoinbaseAdapter::exchange(), component = ?CoinbaseAdapter::component(), text = ?text, "error while parsing update");
                         },
                         Ok(WsMessage::Snapshot(depth)) => {
                             let inst_id = depth.product_id.replace("-", "");
                             if let Err(e) = self.validate_snapshot(&depth) {
-                                error!(exchange = ?Exchange::Coinbase, component = ?Component::Adapter, error = ?e, "error while validating snapshot");
+                                error!(exchange = ?CoinbaseAdapter::exchange(), component = ?CoinbaseAdapter::component(), error = ?e, "error while validating snapshot");
                                 self.clear_book_state();
                                 if let Err(e) = self.control_tx.blocking_send(ControlEvent::Resync) {
-                                    error!(exchange = ?Exchange::Coinbase, component = ?Component::Adapter, error = ?e, "error while sending resync");
+                                    error!(exchange = ?CoinbaseAdapter::exchange(), component = ?CoinbaseAdapter::component(), error = ?e, "error while sending resync");
                                 }
                             }
                             let snapshot_event = NormalizedEvent::Book(BookEventType::Snapshot, NormalizedBookData {
@@ -111,12 +120,12 @@ impl CoinbaseAdapter {
                                 }
                             });
                             let event_envelope = EventEnvelope {
-                                exchange: Exchange::Coinbase,
+                                exchange: CoinbaseAdapter::exchange(),
                                 event: snapshot_event
                             };
         
                             if let Err(e) = self.normalized_tx.blocking_send(event_envelope) {
-                                error!(exchange = ?Exchange::Coinbase, component = ?Component::Adapter, error = ?e, "error while sending snapshot event");
+                                error!(exchange = ?CoinbaseAdapter::exchange(), component = ?CoinbaseAdapter::component(), error = ?e, "error while sending snapshot event");
                             }
 
                             let mut status = ExchangeStatus::Initializing(0.0);
@@ -127,19 +136,19 @@ impl CoinbaseAdapter {
                                 status = ExchangeStatus::Running;
                             }
                             let event_envelope = EventEnvelope {
-                                exchange: Exchange::Coinbase,
+                                exchange: CoinbaseAdapter::exchange(),
                                 event: NormalizedEvent::ApplyStatus(status)
                             };
                             if let Err(e) = self.normalized_tx.blocking_send(event_envelope) {
-                                error!(exchange = ?Exchange::Coinbase, component = ?Component::Adapter, error = ?e, "error while sending running status event");
+                                error!(exchange = ?CoinbaseAdapter::exchange(), component = ?CoinbaseAdapter::component(), error = ?e, "error while sending running status event");
                             }
                         },
                         Ok(WsMessage::Update(depth)) => {
                             let inst_id = depth.product_id.replace("-", "");
                             if let Err(e) = self.validate_update(&depth) {
-                                error!(exchange = ?Exchange::Coinbase, component = ?Component::Adapter, error = ?e, "error while validating update");
+                                error!(exchange = ?CoinbaseAdapter::exchange(), component = ?CoinbaseAdapter::component(), error = ?e, "error while validating update");
                                 if let Err(e) = self.control_tx.blocking_send(ControlEvent::Resync) {
-                                    error!(exchange = ?Exchange::Coinbase, component = ?Component::Adapter, error = ?e, "error while sending resync");
+                                    error!(exchange = ?CoinbaseAdapter::exchange(), component = ?CoinbaseAdapter::component(), error = ?e, "error while sending resync");
                                 }
                             }
                             let mut bids = Vec::new();
@@ -160,12 +169,12 @@ impl CoinbaseAdapter {
                                 }
                             });
                             let event_envelope = EventEnvelope {
-                                exchange: Exchange::Coinbase,
+                                exchange: CoinbaseAdapter::exchange(),
                                 event: snapshot_event
                             };
         
                             if let Err(e) = self.normalized_tx.blocking_send(event_envelope) {
-                                error!(exchange = ?Exchange::Coinbase, component = ?Component::Adapter, error = ?e, "error while sending snapshot event");
+                                error!(exchange = ?CoinbaseAdapter::exchange(), component = ?CoinbaseAdapter::component(), error = ?e, "error while sending snapshot event");
                             }
                         }
                     }        
@@ -179,7 +188,7 @@ impl ExchangeAdapter for CoinbaseAdapter {
     type SnapshotPayload = ParsedBookSnapshot;
     type UpdatePayload = ParsedBookUpdate;
 
-    fn exchange(&self) -> Exchange {
+    fn exchange() -> Exchange {
         Exchange::Coinbase
     }
 

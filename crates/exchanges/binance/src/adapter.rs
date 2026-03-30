@@ -1,7 +1,7 @@
 use std::{collections::HashMap, error::Error, mem, time::{SystemTime, UNIX_EPOCH}};
 
 use md_core::{adapter_trait::ExchangeAdapter, events::ControlEvent, types::ExchangeStatus};
-use md_core::{book::BookLevels, events::{BookEventType, EventEnvelope, NormalizedBookData, NormalizedEvent}, logging::types::Component, types::{Exchange, Instrument}};
+use md_core::{book::BookLevels, events::{BookEventType, EventEnvelope, NormalizedBookData, NormalizedEvent}, types::{Exchange, Instrument}};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tracing::{error, warn};
 
@@ -30,19 +30,19 @@ impl BinanceAdapter {
 
     fn drain_buffered_updates(&mut self, instrument: Instrument) {
         let Some(book) = self.book_states.get_mut(&instrument) else {
-            error!(exchange = ?Exchange::Binance, component = ?Component::Adapter, symbol = ?instrument, "symbol not found");
+            error!(exchange = ?BinanceAdapter::exchange(), component = ?BinanceAdapter::component(), symbol = ?instrument, "symbol not found");
             return;
         };
         if book.status != BookSyncStatus::WaitingSnapshot {
-            error!(exchange = ?Exchange::Binance, component = ?Component::Adapter, symbol = ?instrument, status = ?book.status, "book status different from WaitingSnapshot");
+            error!(exchange = ?BinanceAdapter::exchange(), component = ?BinanceAdapter::component(), symbol = ?instrument, status = ?book.status, "book status different from WaitingSnapshot");
             return;
         }
 
         for u in mem::take(&mut book.symbols_pending_snapshot) {
             if let Err(e) = self.raw_tx.blocking_send(BinanceMdMsg::WsMessage(u)) {
                 error!(
-                    exchange = ?Exchange::Binance,
-                    component = ?Component::Adapter,
+                    exchange = ?BinanceAdapter::exchange(),
+                    component = ?BinanceAdapter::component(),
                     error = ?e,
                     "error while sending the update event"
                 );
@@ -59,6 +59,15 @@ impl BinanceAdapter {
             book.symbols_pending_snapshot.clear();
         }
         self.live_books = 0;
+        
+        let status = ExchangeStatus::Initializing(0.0);
+        let event_envelope = EventEnvelope {
+            exchange: BinanceAdapter::exchange(),
+            event: NormalizedEvent::ApplyStatus(status)
+        };
+        if let Err(e) = self.normalized_tx.blocking_send(event_envelope) {
+            error!(exchange = ?BinanceAdapter::exchange(), component = ?BinanceAdapter::component(), error = ?e, "error while sending running status event");
+        }
     }
 
     fn validate_snapshot(&mut self, payload: &ValidateSnapshot) -> Result<(), ValidateBookError> {
@@ -81,7 +90,7 @@ impl BinanceAdapter {
             let latency = now.saturating_sub(payload.event_time);
 
             if latency > 1000 {
-                warn!(exchange = ?Exchange::Binance, component = ?Component::Adapter, symbol = ?payload.symbol, "high latency for update: {} ms", latency);
+                warn!(exchange = ?BinanceAdapter::exchange(), component = ?BinanceAdapter::component(), symbol = ?payload.symbol, "high latency for update: {} ms", latency);
             }
         }
 
@@ -108,27 +117,27 @@ impl BinanceAdapter {
                         self.book_states.insert(i.clone(), BookState::new());
                     }
                     let event_envelope = EventEnvelope {
-                        exchange: Exchange::Binance,
+                        exchange: BinanceAdapter::exchange(),
                         event: NormalizedEvent::ApplyStatus(ExchangeStatus::Initializing(0.0))
                     };
                     if let Err(e) = self.normalized_tx.blocking_send(event_envelope) {
-                        error!(exchange = ?Exchange::Binance, component = ?Component::Adapter, error = ?e, "error while sending running status event");
+                        error!(exchange = ?BinanceAdapter::exchange(), component = ?BinanceAdapter::component(), error = ?e, "error while sending running status event");
                     }
                 },
                 BinanceMdMsg::Snapshot(payload) => {
                     let Ok(parsed_snapshot) = serde_json::from_slice::<ParsedBookSnapshot>(&payload.payload) else {
                         let text = String::from_utf8_lossy(&payload.payload);
-                        error!(exchange = ?Exchange::Binance, component = ?Component::Adapter, symbol = ?payload.symbol, text = ?text, "error while parsing snapshot");
+                        error!(exchange = ?BinanceAdapter::exchange(), component = ?BinanceAdapter::component(), symbol = ?payload.symbol, text = ?text, "error while parsing snapshot");
                         continue;
                     };
                     if let Err(e) = self.validate_snapshot(&ValidateSnapshot{
                         symbol: payload.symbol.clone(),
                         last_update_id: parsed_snapshot.last_update_id
                     }) {
-                        error!(exchange = ?Exchange::Binance, component = ?Component::Adapter, symbol = ?payload.symbol, error = ?e, "error while validating snapshot");
-                        self.clear_book_state();                 
+                        error!(exchange = ?BinanceAdapter::exchange(), component = ?BinanceAdapter::component(), symbol = ?payload.symbol, error = ?e, "error while validating snapshot");
+                        self.clear_book_state();
                         if let Err(e) = self.control_tx.blocking_send(ControlEvent::Resync) {
-                            error!(exchange = ?Exchange::Binance, component = ?Component::Adapter, error = ?e, "error while sending resync");
+                            error!(exchange = ?BinanceAdapter::exchange(), component = ?BinanceAdapter::component(), error = ?e, "error while sending resync");
                         }
                     }
                     let book_snapshot = BookLevels {
@@ -140,12 +149,12 @@ impl BinanceAdapter {
                         levels: book_snapshot
                     });
                     let event_envelope = EventEnvelope {
-                        exchange: Exchange::Binance,
+                        exchange: BinanceAdapter::exchange(),
                         event: snapshot_event
                     };
 
                     if let Err(e) = self.normalized_tx.blocking_send(event_envelope) {
-                        error!(exchange = ?Exchange::Binance, component = ?Component::Adapter, error = ?e, "error while sending snapshot event");
+                        error!(exchange = ?BinanceAdapter::exchange(), component = ?BinanceAdapter::component(), error = ?e, "error while sending snapshot event");
                     }
 
                     self.drain_buffered_updates(payload.symbol);
@@ -157,27 +166,27 @@ impl BinanceAdapter {
                         status = ExchangeStatus::Running;
                     }
                     let event_envelope = EventEnvelope {
-                        exchange: Exchange::Binance,
+                        exchange: BinanceAdapter::exchange(),
                         event: NormalizedEvent::ApplyStatus(status)
                     };
                     if let Err(e) = self.normalized_tx.blocking_send(event_envelope) {
-                        error!(exchange = ?Exchange::Binance, component = ?Component::Adapter, error = ?e, "error while sending running status event");
+                        error!(exchange = ?BinanceAdapter::exchange(), component = ?BinanceAdapter::component(), error = ?e, "error while sending running status event");
                     }
                 },
                 BinanceMdMsg::WsMessage(payload) => {
                     match serde_json::from_slice::<WsMessage>(&payload) {
                         Ok(WsMessage::Confirmation(confirmation)) => {
                             if let Some(result) = confirmation.result {
-                                error!(exchange = ?Exchange::Binance, component = ?Component::Adapter, result = ?result,"subscription result different from null");
+                                error!(exchange = ?BinanceAdapter::exchange(), component = ?BinanceAdapter::component(), result = ?result,"subscription result different from null");
                             }
                         },
                         Err(_) => {
                             let text = String::from_utf8_lossy(&payload);
-                            error!(exchange = ?Exchange::Binance, component = ?Component::Adapter, text = ?text, "error while parsing update");
+                            error!(exchange = ?BinanceAdapter::exchange(), component = ?BinanceAdapter::component(), text = ?text, "error while parsing update");
                         },
                         Ok(WsMessage::Update(update)) => {
                             let Some(book) = self.book_states.get_mut(&update.symbol) else {
-                                error!(exchange = ?Exchange::Binance, component = ?Component::Adapter, symbol = ?update.symbol, "symbol not found");
+                                error!(exchange = ?BinanceAdapter::exchange(), component = ?BinanceAdapter::component(), symbol = ?update.symbol, "symbol not found");
                                 continue;
                             };
                             match book.status {
@@ -195,8 +204,8 @@ impl BinanceAdapter {
                                     expected_next_update_id,
                                 }) => {
                                     error!(
-                                        exchange = ?Exchange::Binance,
-                                        component = ?Component::Adapter,
+                                        exchange = ?BinanceAdapter::exchange(),
+                                        component = ?BinanceAdapter::component(),
                                         symbol = ?update.symbol,
                                         error = ?e,
                                         event_first_update_id = event_first_update_id,
@@ -206,8 +215,8 @@ impl BinanceAdapter {
                                     self.clear_book_state();
                                     if let Err(e) = self.control_tx.blocking_send(ControlEvent::Resync) {
                                         error!(
-                                            exchange = ?Exchange::Binance,
-                                            component = ?Component::Adapter,
+                                            exchange = ?BinanceAdapter::exchange(),
+                                            component = ?BinanceAdapter::component(),
                                             error = ?e,
                                             "error while sending resync"
                                         );
@@ -216,8 +225,8 @@ impl BinanceAdapter {
                                 },
                                 Err(e) => {
                                     error!(
-                                        exchange = ?Exchange::Binance,
-                                        component = ?Component::Adapter,
+                                        exchange = ?BinanceAdapter::exchange(),
+                                        component = ?BinanceAdapter::component(),
                                         symbol = ?update.symbol,
                                         error = ?e,
                                         "error while validating update"
@@ -237,12 +246,12 @@ impl BinanceAdapter {
                                 levels: book_update
                             });
                             let event_envelope = EventEnvelope {
-                                exchange: Exchange::Binance,
+                                exchange: BinanceAdapter::exchange(),
                                 event: update_event
                             };
                             
                             if let Err(e) = self.normalized_tx.blocking_send(event_envelope) {
-                                error!(exchange = ?Exchange::Binance, component = ?Component::Adapter, error = ?e, "error while sending update event");
+                                error!(exchange = ?BinanceAdapter::exchange(), component = ?BinanceAdapter::component(), error = ?e, "error while sending update event");
                             }
                         },
                     }
@@ -256,7 +265,7 @@ impl ExchangeAdapter for BinanceAdapter {
     type SnapshotPayload = ValidateSnapshot;
     type UpdatePayload = ParsedBookUpdate;
 
-    fn exchange(&self) -> Exchange {
+    fn exchange() -> Exchange {
         Exchange::Binance
     }
 

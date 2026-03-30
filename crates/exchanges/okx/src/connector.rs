@@ -2,7 +2,7 @@ use std::{collections::HashMap, error::Error, sync::Arc};
 
 use bytes::BytesMut;
 use futures_util::StreamExt;
-use md_core::{connector_trait::{ConnectionTasks, ExchangeConnector, WriteCommand}, events::{ControlEvent, InboundEvent, PingMsg}, logging::types::Component, types::{Exchange, Instrument}};
+use md_core::{connector_trait::{ConnectionTasks, ExchangeConnector, WriteCommand}, events::{ControlEvent, InboundEvent, PingMsg}, types::{Exchange, Instrument}};
 use reqwest::Client;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::time::{sleep, Duration};
@@ -135,27 +135,27 @@ impl ExchangeConnector for OkxConnector {
 
     async fn start(&mut self) {
         if let Err(e) = self.subscribe_streams().await {
-            error!(exchange = ?Exchange::Okx, component = ?Component::Connector, error = ?e, "error while subscribing to streams");
+            error!(exchange = ?OkxConnector::exchange(), component = ?OkxConnector::component(), error = ?e, "error while subscribing to streams");
             return;
         }
         while let Some(msg) = self.inbound_rx.recv().await {
             match msg {
                 InboundEvent::WsMessage(payload) => {
                     if let Err(e) = self.raw_tx.send(OkxMdMsg::Raw(payload)).await {
-                        error!(exchange = ?Exchange::Okx, component = ?Component::Connector, error = ?e, "error while sending the ws message");
+                        error!(exchange = ?OkxConnector::exchange(), component = ?OkxConnector::component(), error = ?e, "error while sending the ws message");
                         continue;
                     }
                 },
                 InboundEvent::Ping(ping_msg) => {
                     if let Err(e) = self.pong(ping_msg).await {
-                        error!(exchange = ?Exchange::Okx, component = ?Component::Connector, error = ?e, "error while sending the pong command");
+                        error!(exchange = ?OkxConnector::exchange(), component = ?OkxConnector::component(), error = ?e, "error while sending the pong command");
                         continue;
                     }
                 },
                 InboundEvent::ConnectionClosed => {
-                    info!(exchange = ?Exchange::Okx, component = ?Component::Connector, "connection close, reconnecting");
+                    info!(exchange = ?OkxConnector::exchange(), component = ?OkxConnector::component(), "connection close, reconnecting");
                     if let Err(e) = self.subscribe_streams().await {
-                        error!(exchange = ?Exchange::Okx, component = ?Component::Connector, error = ?e, "error while subscribing to streams");
+                        error!(exchange = ?OkxConnector::exchange(), component = ?OkxConnector::component(), error = ?e, "error while subscribing to streams");
                         continue;
                     }
                 }
@@ -172,7 +172,7 @@ async fn control_manager_task(mut control_rx: Receiver<ControlEvent>, manager_tx
                 if let Err(e) = manager_tx
                     .send(ManagerCommand::RecreateWithSnapshots)
                     .await {
-                        error!(exchange = ?Exchange::Okx, component = ?Component::Connector, error = ?e, "failed to send RecreateWithSnapshots command to manager");
+                        error!(exchange = ?OkxConnector::exchange(), component = ?OkxConnector::component(), error = ?e, "failed to send RecreateWithSnapshots command to manager");
                     }
             }
         }
@@ -202,7 +202,7 @@ async fn connection_manager_task(
             }
             ManagerCommand::RecreateWithSnapshots => {
                 if recreate_in_progress {
-                    info!(exchange = ?Exchange::Okx, component = ?Component::Connector, "recreate already in progress, skipping");
+                    info!(exchange = ?OkxConnector::exchange(), component = ?OkxConnector::component(), "recreate already in progress, skipping");
                     continue;
                 }
 
@@ -234,10 +234,10 @@ async fn pong_ws(connections: &HashMap<u8, ConnectionTasks>, msg: PingMsg) {
             .send(WriteCommand::Pong(msg.payload))
             .await
         {
-            error!(exchange = ?Exchange::Okx, component = ?Component::Connector, error = ?e, "error while sending the pong command");
+            error!(exchange = ?OkxConnector::exchange(), component = ?OkxConnector::component(), error = ?e, "error while sending the pong command");
         }
     } else {
-        error!(exchange = ?Exchange::Okx, component = ?Component::Connector, "pong requested for unknown connection");
+        error!(exchange = ?OkxConnector::exchange(), component = ?OkxConnector::component(), "pong requested for unknown connection");
     }
 }
 
@@ -259,12 +259,12 @@ async fn recreate_with_snapshots_backoff(
         ).await {
             Ok(()) => {
                 if let Err(e) = cmd_tx.send(ManagerCommand::RecreateFinished).await {
-                    error!(exchange = ?Exchange::Okx, component = ?Component::Connector, error = ?e, "failed to notify recreate finished");
+                    error!(exchange = ?OkxConnector::exchange(), component = ?OkxConnector::component(), error = ?e, "failed to notify recreate finished");
                 }
                 return;
             }
             Err(e) => {
-                error!(exchange = ?Exchange::Okx, component = ?Component::Connector, error = ?e, "error while recreating connections");
+                error!(exchange = ?OkxConnector::exchange(), component = ?OkxConnector::component(), error = ?e, "error while recreating connections");
                 let delay = OkxConnector::retry_delay(&backoff_secs, attempt);
                 attempt = attempt.saturating_add(1);
                 sleep(Duration::from_secs(delay)).await; // After the last stage we keep retrying every 60s

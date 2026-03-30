@@ -39,8 +39,11 @@ pub trait ExchangeConnector {
     /// Type used to represent a single subscription payload for this exchange.
     type SubscriptionsInfo;
 
-    /// Exchange identifier for logging/telemetry.
     fn exchange() -> Exchange;
+
+    fn component() -> Component {
+        Component::Connector
+    }
 
     /// Build websocket subscription payloads, splitting the symbol list across multiple connections if needed.
     async fn build_subscriptions(client: Client, rest_url: &Url, max_subscription_per_ws: usize) -> Result<Self::SubscriptionsInfo, Box<dyn Error + Send + Sync + 'static>>;
