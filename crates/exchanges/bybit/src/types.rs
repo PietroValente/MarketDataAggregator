@@ -1,44 +1,46 @@
-use md_core::types::{Instrument, Price, Qty, RawMdMsg};
+use std::str::FromStr;
+
+use md_core::{
+    connector_trait::ConnectionTasks,
+    events::PingMsg,
+    types::{Instrument, Price, Qty, RawMdMsg},
+};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Deserializer, Serialize};
 use thiserror::Error;
 use tokio_tungstenite::tungstenite::Message;
 use url::Url;
-use std::str::FromStr;
 
-pub struct BookState {
-    pub initialized: bool,
-    pub last_update_id: Option<u64>
+/* Connector commands and transport messages */
+
+pub enum ManagerCommand {
+    InsertSubscription(u8, ConnectionTasks),
+    RecreateWithSnapshots,
+    RecreateFinished,
+    Pong(PingMsg),
 }
 
-impl BookState {
-    pub fn new() -> Self {
-        Self {
-            initialized: false,
-            last_update_id: None
-        }
-    }
+pub enum BybitMdMsg {
+    Instruments(Vec<Instrument>),
+    Raw(RawMdMsg),
 }
+
+/* Connector/API configuration and subscription payloads */
 
 pub struct BybitUrls {
     pub exchange_info: Url,
     pub ws: Url,
 }
 
-pub enum BybitMdMsg {
-    Instruments(Vec<Instrument>),
-    Raw(RawMdMsg)
-}
-
 #[derive(Clone)]
 pub struct Subscriptions {
     pub symbols: Vec<Instrument>,
-    pub messages: Vec<Message>
+    pub messages: Vec<Message>,
 }
 
 #[derive(Deserialize)]
 pub struct ApiResponse {
-    pub result: ApiList
+    pub result: ApiList,
 }
 
 #[derive(Deserialize)]
@@ -49,20 +51,45 @@ pub struct ApiList {
 #[derive(Deserialize)]
 pub struct SymbolInfo {
     pub symbol: Instrument,
-    pub status: String
+    pub status: String,
 }
 
 #[derive(Debug, Serialize)]
 pub struct SubscriptionRequest {
     pub op: String,
-    pub args: Vec<String>
+    pub args: Vec<String>,
 }
+
+/* Book state and sync flow */
+
+pub struct BookState {
+    pub initialized: bool,
+    pub last_update_id: Option<u64>,
+}
+
+impl BookState {
+    pub fn new() -> Self {
+        Self {
+            initialized: false,
+            last_update_id: None,
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Clone, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DepthBookAction {
+    Snapshot,
+    Delta,
+}
+
+/* Incoming websocket payloads */
 
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 pub enum WsMessage {
     Confirmation(SubscriptionConfirmation),
-    Depth(ParsedBookMessage)
+    Depth(ParsedBookMessage),
 }
 
 #[derive(Debug, Deserialize)]
@@ -70,7 +97,7 @@ pub struct SubscriptionConfirmation {
     pub success: bool,
     pub ret_msg: String,
     pub conn_id: String,
-    pub op: String
+    pub op: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -81,15 +108,8 @@ pub struct ParsedBookMessage {
     pub action: DepthBookAction,
 
     pub ts: u64,
-    pub cts: u64, 
-    pub data: ParsedBookData
-}
-
-#[derive(Debug, PartialEq, Clone, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum DepthBookAction {
-    Snapshot,
-    Delta
+    pub cts: u64,
+    pub data: ParsedBookData,
 }
 
 #[derive(Debug, Deserialize)]
@@ -107,24 +127,10 @@ pub struct ParsedBookData {
     pub update_id: u64,
 
     #[serde(rename = "seq")]
-    pub sequence: u64
+    pub sequence: u64,
 }
 
-fn deserialize_levels<'de, D>(deserializer: D) -> Result<Vec<(Price, Qty)>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let raw: Vec<[String; 2]> = Vec::deserialize(deserializer)?;
-
-    raw.into_iter()
-        .map(|[p, q]| {
-            let price = Decimal::from_str(&p).map_err(serde::de::Error::custom)?;
-            let qty = Decimal::from_str(&q).map_err(serde::de::Error::custom)?;
-
-            Ok((Price(price), Qty(qty)))
-        })
-        .collect()
-}
+/* Error types */
 
 #[derive(Debug, Error)]
 pub enum ValidateBookError {
@@ -144,5 +150,34 @@ pub enum ValidateBookError {
     StaleUpdate {
         new_update_id: u64,
         last_update_id: u64,
-    }
+    },
+}
+
+#[derive(Debug, Error)]
+pub enum BybitConnectorError {
+    #[error("max_subscription_per_ws cannot be 0")]
+    InvalidMaxSubscriptionPerWs,
+
+    #[error("too many websocket batches for u8 ws_id: got {batches}, max {max_supported}")]
+    TooManyWsBatchesForU8Id {
+        batches: usize,
+        max_supported: usize,
+    },
+}
+
+/* Shared deserializer helpers */
+
+fn deserialize_levels<'de, D>(deserializer: D) -> Result<Vec<(Price, Qty)>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let raw: Vec<[String; 2]> = Vec::deserialize(deserializer)?;
+
+    raw.into_iter()
+        .map(|[p, q]| {
+            let price = Decimal::from_str(&p).map_err(serde::de::Error::custom)?;
+            let qty = Decimal::from_str(&q).map_err(serde::de::Error::custom)?;
+            Ok((Price(price), Qty(qty)))
+        })
+        .collect()
 }

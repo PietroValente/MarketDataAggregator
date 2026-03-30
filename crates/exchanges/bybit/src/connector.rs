@@ -10,19 +10,12 @@ use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{error, info};
 use url::Url;
 
-use crate::types::{ApiResponse, BybitMdMsg, BybitUrls, SubscriptionRequest, Subscriptions};
+use crate::types::{ApiResponse, BybitConnectorError, BybitMdMsg, BybitUrls, ManagerCommand, SubscriptionRequest, Subscriptions};
 
 pub struct BybitConnector {
     manager_tx: Sender<ManagerCommand>,
     raw_tx: Sender<BybitMdMsg>,
     inbound_rx: Receiver<InboundEvent>
-}
-
-enum ManagerCommand {
-    InsertSubscription(u8, ConnectionTasks),
-    RecreateWithSnapshots,
-    RecreateFinished,
-    Pong(PingMsg)
 }
 
 impl BybitConnector {
@@ -93,13 +86,9 @@ impl ExchangeConnector for BybitConnector {
         Ok(list)
     }
 
-    async fn build_subscriptions(
-        client: Client,
-        rest_url: &Url,
-        max_subscription_per_ws: usize,
-    ) -> Result<Subscriptions, Box<dyn Error + Send + Sync + 'static>> {
+    async fn build_subscriptions(client: Client, rest_url: &Url, max_subscription_per_ws: usize) -> Result<Subscriptions, Box<dyn Error + Send + Sync + 'static>> {
         if max_subscription_per_ws == 0 {
-            return Err("max_subscription_per_ws cannot be 0".into());
+            return Err(BybitConnectorError::InvalidMaxSubscriptionPerWs.into());
         }
     
         let symbols = BybitConnector::get_subscriptions_list_backoff(client, rest_url).await;
@@ -292,6 +281,14 @@ async fn recreate_with_snapshots(
     inbound_tx: Sender<InboundEvent>,
     cmd_tx: Sender<ManagerCommand>,
 ) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {    
+    if subscriptions_payloads.len() > (u8::MAX as usize) + 1 {
+        return Err(BybitConnectorError::TooManyWsBatchesForU8Id {
+            batches: subscriptions_payloads.len(),
+            max_supported: (u8::MAX as usize) + 1,
+        }
+        .into());
+    }
+
     for (i, message) in subscriptions_payloads.iter().enumerate() {
         let (writer_tx, writer_rx) = channel::<WriteCommand>(64);
         let (ws_stream, _) = connect_async(ws_url.as_str()).await?;

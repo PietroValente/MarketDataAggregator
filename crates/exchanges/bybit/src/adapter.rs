@@ -61,15 +61,13 @@ impl BybitAdapter {
             return Err(ValidateBookError::InstrumentNotFound(payload.data.symbol.clone()));
         };
 
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64;
+        if let Ok(elapsed) = SystemTime::now().duration_since(UNIX_EPOCH) {
+            let now = elapsed.as_millis() as u64;
+            let latency = now.saturating_sub(payload.cts);
 
-        let latency = now - payload.cts;
-
-        if latency > 1000 {
-            warn!(exchange = ?Exchange::Bybit, component = ?Component::Adapter, symbol = ?payload.data.update_id, "high latency for update: {} ms", latency);
+            if latency > 1000 {
+                warn!(exchange = ?Exchange::Bybit, component = ?Component::Adapter, symbol = ?payload.data.update_id, "high latency for update: {} ms", latency);
+            }
         }
 
         match book.last_update_id {
@@ -77,12 +75,12 @@ impl BybitAdapter {
                 if payload.data.update_id <= last_update_id {
                     return Err(ValidateBookError::StaleUpdate { new_update_id: payload.data.update_id, last_update_id });
                 }
-                book.last_update_id = Some(payload.data.update_id);
             },
             None => {
                 return Err(ValidateBookError::MissingSnapshot)
             }
-        }        
+        }
+        book.last_update_id = Some(payload.data.update_id);
         Ok(())
     }
 
@@ -138,7 +136,10 @@ impl BybitAdapter {
                                         error!(exchange = ?Exchange::Bybit, component = ?Component::Adapter, error = ?e, "error while sending snapshot event");
                                     }
 
-                                    let mut status = ExchangeStatus::Initializing(self.live_books as f32/self.book_states.len() as f32);
+                                    let mut status = ExchangeStatus::Initializing(0.0);
+                                    if !self.book_states.is_empty() {
+                                        status = ExchangeStatus::Initializing(self.live_books as f32 / self.book_states.len() as f32);
+                                    }
                                     if self.live_books == self.book_states.len() && !self.book_states.is_empty() {
                                         status = ExchangeStatus::Running;
                                     }
