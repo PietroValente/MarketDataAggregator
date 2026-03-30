@@ -280,9 +280,7 @@ async fn recreate_with_snapshots_backoff(
             }
             Err(e) => {
                 error!(exchange = ?Exchange::Binance, component = ?Component::Connector, error = ?e, "error while recreating connections");
-                let delay = *backoff_secs
-                    .get(attempt)
-                    .unwrap_or(backoff_secs.last().unwrap());
+                let delay = BinanceConnector::retry_delay(&backoff_secs, attempt);
                 attempt = attempt.saturating_add(1);
                 sleep(Duration::from_secs(delay)).await; // After the last stage we keep retrying every 60s
             }
@@ -298,10 +296,10 @@ async fn recreate_with_snapshots(
     raw_tx: Sender<BinanceMdMsg>,
     cmd_tx: Sender<ManagerCommand>
 ) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
-    if batches_payloads.len() > (u8::MAX as usize) + 1 {
+    if batches_payloads.len() > BinanceConnector::ws_id_capacity() {
         return Err(BinanceConnectorError::TooManyWsBatchesForU8Id {
             batches: batches_payloads.len(),
-            max_supported: (u8::MAX as usize) + 1,
+            max_supported: BinanceConnector::ws_id_capacity(),
         }
         .into());
     }
@@ -315,7 +313,13 @@ async fn recreate_with_snapshots(
         let writer_url = ws_url.clone();
 
         let reader_tx_clone = inbound_tx.clone();
-        let ws_id = i as u8;
+        let Some(ws_id) = BinanceConnector::ws_id_from_index(i) else {
+            return Err(BinanceConnectorError::TooManyWsBatchesForU8Id {
+                batches: batches_payloads.len(),
+                max_supported: BinanceConnector::ws_id_capacity(),
+            }
+            .into());
+        };
         let reader_handle = tokio::spawn(async move {
             BinanceConnector::reader_task(ws_id, writer_url, read, reader_tx_clone).await;
         });

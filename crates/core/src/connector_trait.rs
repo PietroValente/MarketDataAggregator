@@ -57,6 +57,23 @@ pub trait ExchangeConnector {
     /// Fetch the list of symbols/instruments to subscribe to via REST.
     async fn get_subscriptions_list(client: Client, rest_url: &Url,) -> Result<Vec<Instrument>, Box<dyn Error + Send + Sync + 'static>>;
 
+    /// Maximum number of websocket connections addressable by `u8` IDs.
+    fn ws_id_capacity() -> usize {
+        usize::from(u8::MAX) + 1
+    }
+
+    /// Convert a connection index into a websocket ID.
+    fn ws_id_from_index(index: usize) -> Option<u8> {
+        u8::try_from(index).ok()
+    }
+
+    /// Pick backoff delay for current attempt, capping to last stage.
+    fn retry_delay(backoff_secs: &[u64], attempt: usize) -> u64 {
+        *backoff_secs
+            .get(attempt)
+            .unwrap_or(backoff_secs.last().unwrap_or(&1))
+    }
+
     /// Backoff wrapper around `get_subscriptions_list`.
     ///
     /// Useful when the REST call can fail transiently or take too long due to unstable connectivity.
@@ -75,9 +92,7 @@ pub trait ExchangeConnector {
                 }
                 Err(e) => {
                     error!(exchange = ?Self::exchange(), component = ?Component::Connector, error = ?e, "error while building subscriptions");
-                    let delay = *backoff_secs
-                        .get(attempt)
-                        .unwrap_or(backoff_secs.last().unwrap());
+                    let delay = Self::retry_delay(&backoff_secs, attempt);
                     attempt = attempt.saturating_add(1);
                     sleep(Duration::from_secs(delay)).await; // After the last stage we keep retrying every 60s
                 }

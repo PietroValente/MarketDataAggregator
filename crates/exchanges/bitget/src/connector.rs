@@ -264,9 +264,7 @@ async fn recreate_with_snapshots_backoff(
             }
             Err(e) => {
                 error!(exchange = ?Exchange::Bitget, component = ?Component::Connector, error = ?e, "error while recreating connections");
-                let delay = *backoff_secs
-                    .get(attempt)
-                    .unwrap_or(backoff_secs.last().unwrap());
+                let delay = BitgetConnector::retry_delay(&backoff_secs, attempt);
                 attempt = attempt.saturating_add(1);
                 sleep(Duration::from_secs(delay)).await; // After the last stage we keep retrying every 60s
             }
@@ -280,10 +278,10 @@ async fn recreate_with_snapshots(
     inbound_tx: Sender<InboundEvent>,
     cmd_tx: Sender<ManagerCommand>,
 ) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {    
-    if subscriptions_payloads.len() > (u8::MAX as usize) + 1 {
+    if subscriptions_payloads.len() > BitgetConnector::ws_id_capacity() {
         return Err(BitgetConnectorError::TooManyWsBatchesForU8Id {
             batches: subscriptions_payloads.len(),
-            max_supported: (u8::MAX as usize) + 1,
+            max_supported: BitgetConnector::ws_id_capacity(),
         }
         .into());
     }
@@ -297,7 +295,13 @@ async fn recreate_with_snapshots(
         let writer_url = ws_url.clone();
 
         let reader_tx_clone = inbound_tx.clone();
-        let ws_id = i as u8;
+        let Some(ws_id) = BitgetConnector::ws_id_from_index(i) else {
+            return Err(BitgetConnectorError::TooManyWsBatchesForU8Id {
+                batches: subscriptions_payloads.len(),
+                max_supported: BitgetConnector::ws_id_capacity(),
+            }
+            .into());
+        };
         let reader_handle = tokio::spawn(async move {
             BitgetConnector::reader_task(ws_id, writer_url, read, reader_tx_clone).await;
         });
