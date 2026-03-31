@@ -1,6 +1,6 @@
 use std::str::FromStr;
 
-use md_core::{events::PingMsg, traits::connector::ConnectionTasks, types::{Instrument, Price, Qty, RawMdMsg}};
+use md_core::types::{Instrument, Price, Qty, RawMdMsg};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Deserializer, Serialize};
 use thiserror::Error;
@@ -8,13 +8,6 @@ use tokio_tungstenite::tungstenite::Message;
 use url::Url;
 
 /* Connector commands and transport messages */
-
-pub enum ManagerCommand {
-    InsertSubscription(u8, ConnectionTasks),
-    RecreateWithSnapshots,
-    RecreateFinished,
-    Pong(PingMsg),
-}
 
 pub enum BitgetMdMsg {
     Instruments(Vec<Instrument>),
@@ -142,18 +135,6 @@ pub enum ValidateBookError {
 
     #[error("Stale update: event seq={new_seq} <= book seq={last_seq}")]
     StaleUpdate { new_seq: u64, last_seq: u64 },
-}
-
-#[derive(Debug, Error)]
-pub enum BitgetConnectorError {
-    #[error("max_subscription_per_ws cannot be 0")]
-    InvalidMaxSubscriptionPerWs,
-
-    #[error("too many websocket batches for u8 ws_id: got {batches}, max {max_supported}")]
-    TooManyWsBatchesForU8Id {
-        batches: usize,
-        max_supported: usize,
-    },
 }
 
 /* Shared deserializer helpers */

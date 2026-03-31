@@ -1,14 +1,13 @@
-use std::{collections::HashMap, error::Error, sync::Arc};
+use std::{error::Error, sync::Arc};
 
-use futures_util::StreamExt;
-use md_core::{events::{ControlEvent, InboundEvent, PingMsg}, helpers::connector::fetch_json, traits::connector::{ConnectionTasks, ExchangeConnector, WriteCommand}, types::{Exchange, Instrument}};
+use md_core::{connector::{tasks::{connection_manager_task, control_manager_task}, types::{ConnectorError, ManagerCommand, BACKOFF_SECS}}, events::{ControlEvent, InboundEvent, PingMsg}, helpers::connector::{fetch_json, recreate_with_snapshots, retry_with_backoff}, traits::connector::ExchangeConnector, types::{Exchange, Instrument}};
 use reqwest::Client;
-use tokio::{sync::mpsc::{channel, Receiver, Sender}, time::{sleep, Duration}};
-use tokio_tungstenite::{connect_async, tungstenite::Message};
+use tokio::{sync::mpsc::{channel, Receiver, Sender}, time::Duration};
+use tokio_tungstenite::tungstenite::Message;
 use tracing::{error, info};
 use url::Url;
 
-use crate::types::{ApiResponse, BitgetConnectorError, BitgetMdMsg, BitgetUrls, ManagerCommand, SubscriptionRequest, Subscriptions, SymbolParam};
+use crate::types::{ApiResponse, BitgetMdMsg, BitgetUrls, SubscriptionRequest, Subscriptions, SymbolParam};
 
 pub struct BitgetConnector {
     manager_tx: Sender<ManagerCommand>,
@@ -23,23 +22,27 @@ impl BitgetConnector {
     {
         let (inbound_tx, inbound_rx) = channel::<InboundEvent>(4096);
         let ws_url = Arc::from(urls.ws);
+        
         let subscriptions = BitgetConnector::build_subscriptions(client, &urls.exchange_info, max_subscription_per_ws).await?;
-        let subscriptions_payloads = Arc::new(subscriptions.messages);
         raw_tx
             .send(BitgetMdMsg::Instruments(subscriptions.symbols))
             .await?;
-        
+        let subscriptions_payloads = Arc::new(subscriptions.messages);
+
         let (manager_tx, manager_rx) = channel::<ManagerCommand>(128);
 
-        tokio::spawn(connection_manager_task(
+        tokio::spawn(connection_manager_task::<BitgetConnector, Vec<Message>, BitgetMdMsg, _, _>(
             ws_url.clone(),
+            None,
             subscriptions_payloads,
             inbound_tx,
+            None,
             manager_tx.clone(),
             manager_rx,
+            recreate_with_snapshots::<BitgetConnector, BitgetMdMsg>
         ));
 
-        tokio::spawn(control_manager_task(
+        tokio::spawn(control_manager_task::<BitgetConnector>(
             control_rx, 
             manager_tx.clone()
         ));
@@ -47,16 +50,8 @@ impl BitgetConnector {
         Ok(Self {
             raw_tx,
             inbound_rx,
-            manager_tx,
+            manager_tx
         })
-    }
-}
-
-impl ExchangeConnector for BitgetConnector {
-    type SubscriptionsInfo = Subscriptions;
-
-    fn exchange() -> Exchange {
-        Exchange::Bitget
     }
 
     async fn get_subscriptions_list(client: Client, rest_url: &Url) -> Result<Vec<Instrument>, Box<dyn Error + Send + Sync + 'static>> {
@@ -73,10 +68,17 @@ impl ExchangeConnector for BitgetConnector {
 
     async fn build_subscriptions(client: Client, rest_url: &Url, max_subscription_per_ws: usize) -> Result<Subscriptions, Box<dyn Error + Send + Sync + 'static>> {    
         if max_subscription_per_ws == 0 {
-            return Err(BitgetConnectorError::InvalidMaxSubscriptionPerWs.into());
+            return Err(ConnectorError::InvalidMaxSubscriptionPerWs.into());
         }
 
-        let symbols = BitgetConnector::get_subscriptions_list_backoff(client, rest_url).await;
+        let symbols = retry_with_backoff(
+            &BACKOFF_SECS,
+            || BitgetConnector::get_subscriptions_list(client.clone(), rest_url),
+            |e, attempt: usize, delay: Duration| {
+                error!(exchange = ?BitgetConnector::exchange(), component = ?BitgetConnector::component(), error = ?e, attempt = ?attempt, delay = ?delay, "error while building subscriptions");
+            },
+        ).await;
+        
         let mut messages = Vec::new();
     
         for chunk in symbols.chunks(max_subscription_per_ws) {
@@ -149,160 +151,35 @@ impl ExchangeConnector for BitgetConnector {
 
 }
 
-async fn control_manager_task(mut control_rx: Receiver<ControlEvent>, manager_tx: Sender<ManagerCommand>) {
-    while let Some(event) = control_rx.recv().await {
-        match event {
-            ControlEvent::Resync => {
-                if let Err(e) = manager_tx
-                    .send(ManagerCommand::RecreateWithSnapshots)
-                    .await {
-                        error!(exchange = ?BitgetConnector::exchange(), component = ?BitgetConnector::component(), error = ?e, "failed to send RecreateWithSnapshots command to manager");
-                    }
-            }
-        }
-    }
-}
+impl ExchangeConnector for BitgetConnector {
+    type SubscriptionsInfo = Subscriptions;
 
-async fn connection_manager_task(
-    ws_url: Arc<Url>,
-    subscriptions_payloads: Arc<Vec<Message>>,
-    inbound_tx: Sender<InboundEvent>,
-    cmd_tx: Sender<ManagerCommand>,
-    mut cmd_rx: Receiver<ManagerCommand>,
-) {
-    let mut connections: HashMap<u8, ConnectionTasks> = HashMap::new();
-    let mut recreate_in_progress = false;
-
-    while let Some(cmd) = cmd_rx.recv().await {
-        match cmd {
-            ManagerCommand::RecreateFinished => {
-                recreate_in_progress = false;
-            },
-            ManagerCommand::InsertSubscription(ws_id, connection) => {
-                connections.insert(ws_id, connection);
-            },
-            ManagerCommand::Pong(msg) => {
-                pong_ws(&connections, msg).await;
-            }
-            ManagerCommand::RecreateWithSnapshots => {
-                if recreate_in_progress {
-                    info!(exchange = ?BitgetConnector::exchange(), component = ?BitgetConnector::component(), "recreate already in progress, skipping");
-                    continue;
-                }
-
-                recreate_in_progress = true;
-                abort_all_connections(&mut connections);
-
-                tokio::spawn(recreate_with_snapshots_backoff(
-                    ws_url.clone(),
-                    subscriptions_payloads.clone(),
-                    inbound_tx.clone(),
-                    cmd_tx.clone()
-                ));
-            }
-        }
-    }
-}
-
-fn abort_all_connections(connections: &mut HashMap<u8, ConnectionTasks>) {
-    for (_, c) in connections.drain() {
-        c.reader_handle.abort();
-        c.writer_handle.abort();
-    }
-}
-
-async fn pong_ws(connections: &HashMap<u8, ConnectionTasks>, msg: PingMsg) {
-    if let Some(conn) = connections.get(&msg.ws_id) {
-        if let Err(e) = conn
-            .writer_tx
-            .send(WriteCommand::Pong(msg.payload))
-            .await
-        {
-            error!(exchange = ?BitgetConnector::exchange(), component = ?BitgetConnector::component(), error = ?e, "error while sending the pong command");
-        }
-    } else {
-        error!(exchange = ?BitgetConnector::exchange(), component = ?BitgetConnector::component(), "pong requested for unknown connection");
-    }
-}
-
-async fn recreate_with_snapshots_backoff(
-    ws_url: Arc<Url>,
-    subscriptions_payloads: Arc<Vec<Message>>,
-    inbound_tx: Sender<InboundEvent>,
-    cmd_tx: Sender<ManagerCommand>,
-) {
-    let backoff_secs = [1, 5, 15, 30, 60];
-    let mut attempt: usize = 0;
-
-    loop {
-        match recreate_with_snapshots(
-            ws_url.clone(),
-            subscriptions_payloads.clone(),
-            inbound_tx.clone(),
-            cmd_tx.clone()
-        ).await {
-            Ok(()) => {
-                if let Err(e) = cmd_tx.send(ManagerCommand::RecreateFinished).await {
-                    error!(exchange = ?BitgetConnector::exchange(), component = ?BitgetConnector::component(), error = ?e, "failed to notify recreate finished");
-                }
-                return;
-            }
-            Err(e) => {
-                error!(exchange = ?BitgetConnector::exchange(), component = ?BitgetConnector::component(), error = ?e, "error while recreating connections");
-                let delay = BitgetConnector::retry_delay(&backoff_secs, attempt);
-                attempt = attempt.saturating_add(1);
-                sleep(Duration::from_secs(delay)).await; // After the last stage we keep retrying every 60s
-            }
-        }
-    }
-}
-
-async fn recreate_with_snapshots(
-    ws_url: Arc<Url>,
-    subscriptions_payloads: Arc<Vec<Message>>,
-    inbound_tx: Sender<InboundEvent>,
-    cmd_tx: Sender<ManagerCommand>,
-) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {    
-    if subscriptions_payloads.len() > BitgetConnector::ws_id_capacity() {
-        return Err(BitgetConnectorError::TooManyWsBatchesForU8Id {
-            batches: subscriptions_payloads.len(),
-            max_supported: BitgetConnector::ws_id_capacity(),
-        }
-        .into());
+    fn exchange() -> Exchange {
+        Exchange::Bitget
     }
 
-    for (i, message) in subscriptions_payloads.iter().enumerate() {
-        let (writer_tx, writer_rx) = channel::<WriteCommand>(64);
-        let (ws_stream, _) = connect_async(ws_url.as_str()).await?;
-        let (write, read) = ws_stream.split();
-
-        let reader_url = ws_url.clone();
-        let writer_url = ws_url.clone();
-
-        let reader_tx_clone = inbound_tx.clone();
-        let Some(ws_id) = BitgetConnector::ws_id_from_index(i) else {
-            return Err(BitgetConnectorError::TooManyWsBatchesForU8Id {
-                batches: subscriptions_payloads.len(),
-                max_supported: BitgetConnector::ws_id_capacity(),
-            }
-            .into());
-        };
-        let reader_handle = tokio::spawn(async move {
-            BitgetConnector::reader_task(ws_id, writer_url, read, reader_tx_clone).await;
-        });
-
-        let writer_handle = tokio::spawn(async move {
-            BitgetConnector::writer_task(reader_url, write, writer_rx).await;
-        });
-
-        cmd_tx.send( ManagerCommand::InsertSubscription(ws_id, ConnectionTasks {
-            reader_handle,
-            writer_handle,
-            writer_tx: writer_tx.clone(),
-        })).await?;
-        writer_tx
-            .send(WriteCommand::Raw(message.clone()))
-            .await?;
+    async fn build_subscriptions(
+        client: Client,
+        rest_url: &Url,
+        max_subscription_per_ws: usize,
+    ) -> Result<Self::SubscriptionsInfo, Box<dyn Error + Send + Sync + 'static>> {
+        BitgetConnector::build_subscriptions(client, rest_url, max_subscription_per_ws).await
     }
-    Ok(())
+
+    async fn subscribe_streams(
+        &mut self,
+    ) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
+        BitgetConnector::subscribe_streams(self).await
+    }
+
+    async fn pong(
+        &self,
+        msg: PingMsg,
+    ) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
+        BitgetConnector::pong(self, msg).await
+    }
+
+    async fn start(&mut self) {
+        BitgetConnector::start(self).await
+    }
 }

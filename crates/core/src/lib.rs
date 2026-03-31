@@ -4,3 +4,4 @@ pub mod events;
 pub mod traits;
 pub mod logging;
 pub mod helpers;
+pub mod connector;

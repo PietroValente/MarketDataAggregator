@@ -99,9 +99,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     /* CONNECTORS */
     let client = Client::builder()
-                        .connect_timeout(Duration::from_secs(8))
-                        .timeout(Duration::from_secs(20))
-                        .build()?;
+        .connect_timeout(Duration::from_secs(8))
+        .timeout(Duration::from_secs(20))
+        .build()?;
     let binance_client = client.clone();
     let bitget_client = client.clone();
     let bybit_client = client.clone();
