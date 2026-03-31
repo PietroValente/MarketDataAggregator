@@ -1,19 +1,22 @@
 use std::{thread, time::Duration};
-use binance::{connector::BinanceConnector, adapter::BinanceAdapter, types::{BinanceMdMsg, BinanceUrls}};
-use bitget::{connector::BitgetConnector, adapter::BitgetAdapter, types::{BitgetMdMsg, BitgetUrls}};
-use bybit::{connector::BybitConnector, adapter::BybitAdapter, types::{BybitMdMsg, BybitUrls}};
-use coinbase::{connector::CoinbaseConnector, adapter::CoinbaseAdapter, types::{CoinbaseMdMsg, CoinbaseUrls}};
-use engine::Engine;
-use okx::{connector::OkxConnector, adapter::OkxAdapter, types::{OkxMdMsg, OkxUrls}};
-use query::query_manager::QueryManager;
+
 use reqwest::Client;
 use tokio::sync::mpsc::channel;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-use md_core::{traits::connector::ExchangeConnector, events::{ControlEvent, EventEnvelope}, logging::{layer::DbLoggingLayer, writer::DbLoggingWriter}, types::Exchange};
+use url::Url;
+
+use binance::{adapter::BinanceAdapter, connector::BinanceConnector, types::{BinanceMdMsg, BinanceUrls}};
+use bitget::{adapter::BitgetAdapter, connector::BitgetConnector, types::{BitgetMdMsg, BitgetUrls}};
+use bybit::{adapter::BybitAdapter, connector::BybitConnector, types::{BybitMdMsg, BybitUrls}};
+use coinbase::{adapter::CoinbaseAdapter, connector::CoinbaseConnector, types::{CoinbaseMdMsg, CoinbaseUrls}};
+use okx::{adapter::OkxAdapter, connector::OkxConnector, types::{OkxMdMsg, OkxUrls}};
+
+use engine::Engine;
+use md_core::{events::{ControlEvent, EventEnvelope}, logging::{layer::DbLoggingLayer, writer::DbLoggingWriter}, traits::connector::ExchangeConnector, types::Exchange};
+use query::query_manager::QueryManager;
 
 mod config;
 use config::load_config;
-use url::Url;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

@@ -1,13 +1,9 @@
-use std::error::Error;
-use std::sync::Arc;
-use std::time::Duration;
+use std::{error::Error, sync::Arc, time::Duration};
 
+use futures_util::{stream::{SplitSink, SplitStream}, SinkExt, StreamExt};
 use reqwest::Client;
-use tokio::time::sleep;
-use tokio::{net::TcpStream, task::JoinHandle};
-use tokio::sync::mpsc::Sender;
+use tokio::{net::TcpStream, sync::mpsc::Sender, task::JoinHandle, time::sleep};
 use tokio_tungstenite::{tungstenite::Message, MaybeTlsStream, WebSocketStream};
-use futures_util::{stream::SplitSink, stream::SplitStream, SinkExt, StreamExt};
 use tracing::{error, warn};
 use url::Url;
 

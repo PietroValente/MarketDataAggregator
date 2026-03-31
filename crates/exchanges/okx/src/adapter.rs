@@ -1,11 +1,6 @@
-use std::collections::HashMap;
-use std::error::Error;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::{collections::HashMap, error::Error, time::{SystemTime, UNIX_EPOCH}};
 
-use md_core::traits::adapter::ExchangeAdapter;
-use md_core::events::ControlEvent;
-use md_core::types::ExchangeStatus;
-use md_core::{book::BookLevels, events::{BookEventType, EventEnvelope, NormalizedBookData, NormalizedEvent}, types::{Exchange, Instrument}};
+use md_core::{book::BookLevels, events::{BookEventType, ControlEvent, EventEnvelope, NormalizedBookData, NormalizedEvent}, traits::adapter::ExchangeAdapter, types::{Exchange, ExchangeStatus, Instrument}};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tracing::{error, warn};
 

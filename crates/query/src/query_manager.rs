@@ -1,18 +1,7 @@
-use std::{
-    io::{self, Write},
-    time::{Duration, Instant},
-};
+use std::{io::{self, Write}, time::{Duration, Instant}};
 
-use crossterm::{
-    cursor::MoveTo,
-    event::{self, Event, KeyCode, KeyEventKind},
-    execute,
-    terminal::{disable_raw_mode, enable_raw_mode, Clear, ClearType},
-};
-use md_core::{
-    events::{EventEnvelope, NormalizedEvent, NormalizedQuery, NormalizedTop},
-    types::{Exchange, Instrument},
-};
+use crossterm::{cursor::MoveTo, event::{self, Event, KeyCode, KeyEventKind}, execute, terminal::{disable_raw_mode, enable_raw_mode, Clear, ClearType}};
+use md_core::{events::{EventEnvelope, NormalizedEvent, NormalizedQuery, NormalizedTop}, types::{Exchange, Instrument}};
 use tokio::sync::{mpsc::Sender, oneshot};
 
 pub struct QueryManager {

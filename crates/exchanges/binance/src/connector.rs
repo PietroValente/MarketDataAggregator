@@ -1,13 +1,14 @@
 use std::{collections::HashMap, error::Error, sync::Arc};
+
 use bytes::BytesMut;
 use futures_util::{stream, StreamExt, TryStreamExt};
 use md_core::{events::{ControlEvent, InboundEvent, PingMsg}, traits::connector::{ConnectionTasks, ExchangeConnector, WriteCommand}, types::{Exchange, Instrument, RawMdMsg}};
 use reqwest::Client;
-use tokio::sync::mpsc::{channel, Receiver, Sender};
-use tokio::time::{sleep, Duration};
+use tokio::{sync::mpsc::{channel, Receiver, Sender}, time::{sleep, Duration}};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{error, info};
 use url::Url;
+
 use crate::types::{ApiResponse, BinanceConnectorError, BinanceMdMsg, BinanceUrls, DepthQuery, ManagerCommand, SnapshotMsg, SubscriptionBatch, SubscriptionRequest, Subscriptions};
 
 pub struct BinanceConnector {
