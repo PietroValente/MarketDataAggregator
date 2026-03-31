@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::time::{SystemTime, UNIX_EPOCH};
 use chrono::DateTime;
-use md_core::adapter_trait::ExchangeAdapter;
+use md_core::traits::adapter::ExchangeAdapter;
 use md_core::events::ControlEvent;
 use md_core::types::ExchangeStatus;
 use md_core::{book::BookLevels, events::{BookEventType, EventEnvelope, NormalizedBookData, NormalizedEvent}, types::{Exchange, Instrument}};

@@ -1,9 +1,7 @@
 use std::str::FromStr;
 
 use md_core::{
-    connector_trait::ConnectionTasks,
-    events::PingMsg,
-    types::{Instrument, Price, Qty, RawMdMsg},
+    events::PingMsg, traits::connector::ConnectionTasks, types::{Instrument, Price, Qty, RawMdMsg}
 };
 use rust_decimal::Decimal;
 use serde::{Deserialize, Deserializer, Serialize};

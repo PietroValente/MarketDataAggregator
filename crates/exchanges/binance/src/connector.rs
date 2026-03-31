@@ -1,7 +1,7 @@
 use std::{collections::HashMap, error::Error, sync::Arc};
 use bytes::BytesMut;
 use futures_util::{stream, StreamExt, TryStreamExt};
-use md_core::{connector_trait::{ConnectionTasks, ExchangeConnector, WriteCommand}, events::{ControlEvent, InboundEvent, PingMsg}, types::{Exchange, Instrument, RawMdMsg}};
+use md_core::{events::{ControlEvent, InboundEvent, PingMsg}, traits::connector::{ConnectionTasks, ExchangeConnector, WriteCommand}, types::{Exchange, Instrument, RawMdMsg}};
 use reqwest::Client;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::time::{sleep, Duration};

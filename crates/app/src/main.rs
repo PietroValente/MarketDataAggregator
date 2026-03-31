@@ -9,7 +9,7 @@ use query::query_manager::QueryManager;
 use reqwest::Client;
 use tokio::sync::mpsc::channel;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-use md_core::{connector_trait::ExchangeConnector, events::{ControlEvent, EventEnvelope}, logging::{layer::DbLoggingLayer, writer::DbLoggingWriter}, types::Exchange};
+use md_core::{traits::connector::ExchangeConnector, events::{ControlEvent, EventEnvelope}, logging::{layer::DbLoggingLayer, writer::DbLoggingWriter}, types::Exchange};
 
 mod config;
 use config::load_config;
