@@ -1,8 +1,7 @@
 use std::{collections::HashMap, error::Error, sync::Arc};
 
-use bytes::BytesMut;
 use futures_util::StreamExt;
-use md_core::{events::{ControlEvent, InboundEvent, PingMsg}, traits::connector::{ConnectionTasks, ExchangeConnector, WriteCommand}, types::{Exchange, Instrument}};
+use md_core::{events::{ControlEvent, InboundEvent, PingMsg}, helpers::connector::fetch_json, traits::connector::{ConnectionTasks, ExchangeConnector, WriteCommand}, types::{Exchange, Instrument}};
 use reqwest::Client;
 use tokio::{sync::mpsc::{channel, Receiver, Sender}, time::{sleep, Duration}};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
@@ -61,27 +60,14 @@ impl ExchangeConnector for OkxConnector {
     }
 
     async fn get_subscriptions_list(client:Client, rest_url: &Url) -> Result<Vec<Instrument>, Box<dyn Error + Send + Sync + 'static>> {
-        let resp = client
-            .get(rest_url.as_str())
-            .send()
-            .await?
-            .error_for_status()?;
+        let resp  = fetch_json::<ApiResponse>( &client, rest_url, None).await?;
+        
+        let list: Vec<Instrument> = resp.data
+            .into_iter()
+            .filter(|s| s.state == "live")
+            .map(|s| s.inst_id)
+            .collect();
 
-        let mut stream = resp.bytes_stream();
-        let mut body = BytesMut::new();
-
-        while let Some(chunk) = stream.next().await {
-            let chunk = chunk?;
-            body.extend_from_slice(&chunk);
-        }
-
-        let resp: ApiResponse = serde_json::from_slice(&body)?;
-        let mut list = Vec::new();
-        for symbol in resp.data {
-            if symbol.state == "live" {
-                list.push(symbol.inst_id);
-            }
-        }
         Ok(list)
     }
 
