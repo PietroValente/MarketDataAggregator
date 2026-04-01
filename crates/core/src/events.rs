@@ -5,7 +5,8 @@ use crate::{book::{BookLevel, BookLevels}, types::{Exchange, ExchangeStatus, Ins
 #[derive(Debug)]
 pub struct NormalizedBookData {
     pub instrument: Instrument,
-    pub levels: BookLevels
+    pub levels: BookLevels,
+    pub checksum: Option<i32>
 }
 
 #[derive(Debug)]

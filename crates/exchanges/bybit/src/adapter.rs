@@ -110,7 +110,8 @@ impl BybitAdapter {
                                         levels: BookLevels {
                                             asks: depth.data.asks,
                                             bids: depth.data.bids
-                                        }
+                                        },
+                                        checksum: None
                                     });
                                     send_normalized_event::<BybitAdapter>(&self.normalized_tx, snapshot_event);
                                     send_status::<BybitAdapter>(&self.normalized_tx, compute_status(self.live_books, self.book_states.len()));
@@ -140,7 +141,8 @@ impl BybitAdapter {
                                         levels: BookLevels {
                                             asks: depth.data.asks,
                                             bids: depth.data.bids
-                                        }
+                                        },
+                                        checksum: None
                                     });
                                     send_normalized_event::<BybitAdapter>(&self.normalized_tx, update_event);
                                 }

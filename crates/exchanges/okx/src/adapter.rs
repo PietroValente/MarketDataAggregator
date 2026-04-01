@@ -111,12 +111,17 @@ impl OkxAdapter {
                                         }
                                     }
                                     for data in depth.data {
+                                        let mut checksum = None;
+                                        if data.checksum != 0 {
+                                            checksum = Some(data.checksum);
+                                        }
                                         let snapshot_event = NormalizedEvent::Book(BookEventType::Snapshot, NormalizedBookData {
                                             instrument: Instrument::from(inst_id.clone()),
                                             levels: BookLevels {
                                                 asks: data.asks,
                                                 bids: data.bids
-                                            }
+                                            },
+                                            checksum
                                         });
                                         send_normalized_event::<OkxAdapter>(&self.normalized_tx, snapshot_event);
                                     }
@@ -143,12 +148,17 @@ impl OkxAdapter {
                                         Ok(()) => {}
                                     }
                                     for data in depth.data {
+                                        let mut checksum = None;
+                                        if data.checksum != 0 {
+                                            checksum = Some(data.checksum);
+                                        }
                                         let update_event = NormalizedEvent::Book(BookEventType::Update, NormalizedBookData {
                                             instrument: Instrument::from(inst_id.clone()),
                                             levels: BookLevels {
                                                 asks: data.asks,
                                                 bids: data.bids
-                                            }
+                                            },
+                                            checksum
                                         });
                                         send_normalized_event::<OkxAdapter>(&self.normalized_tx, update_event);
                                     }

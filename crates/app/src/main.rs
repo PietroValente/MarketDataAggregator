@@ -1,4 +1,4 @@
-use std::{thread, time::Duration};
+use std::{collections::HashMap, thread, time::Duration};
 
 use reqwest::Client;
 use tokio::sync::mpsc::channel;
@@ -55,13 +55,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (okx_control_tx, okx_control_rx) = channel::<ControlEvent>(config.channels.control_buffer);
 
     /* ENGINE */
-    let exchanges = vec![
-        Exchange::Binance,
-        Exchange::Bitget,
-        Exchange::Bybit,
-        Exchange::Coinbase,
-        Exchange::Okx
-    ];
+    let exchanges = HashMap::from([
+        (Exchange::Binance, binance_control_tx.clone()),
+        (Exchange::Bitget, bitget_control_tx.clone()),
+        (Exchange::Bybit, bybit_control_tx.clone()),
+        (Exchange::Coinbase, coinbase_control_tx.clone()),
+        (Exchange::Okx, okx_control_tx.clone())
+    ]);
     let (normalized_tx, normalized_rx) = channel::<EventEnvelope>(config.channels.normalized_buffer);
     let mut engine = Engine::new(normalized_rx, exchanges);
     thread::spawn(move || {

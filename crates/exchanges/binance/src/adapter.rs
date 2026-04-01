@@ -124,7 +124,8 @@ impl BinanceAdapter {
                     };
                     let snapshot_event = NormalizedEvent::Book(BookEventType::Snapshot, NormalizedBookData {
                         instrument: payload.symbol.clone(),
-                        levels: book_snapshot
+                        levels: book_snapshot,
+                        checksum: None
                     });
                     send_normalized_event::<BinanceAdapter>(&self.normalized_tx, snapshot_event);
                     self.drain_buffered_updates(payload.symbol);
@@ -199,7 +200,8 @@ impl BinanceAdapter {
         
                             let update_event = NormalizedEvent::Book(BookEventType::Update, NormalizedBookData {
                                 instrument: update.symbol.clone(),
-                                levels: book_update
+                                levels: book_update,
+                                checksum: None
                             });
                             send_normalized_event::<BinanceAdapter>(&self.normalized_tx, update_event);
                         },

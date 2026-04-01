@@ -6,7 +6,7 @@ use crate::{logging::types::Component, types::Exchange};
 ///
 /// An adapter consumes exchange-native messages and emits the project's normalized events.
 /// `SnapshotPayload` and `UpdatePayload` are the *parsed* types the adapter wants to validate
-/// (checksums, sequence continuity, ordering) before normalization.
+/// (sequence continuity, ordering) before normalization.
 pub trait ExchangeAdapter {
     type SnapshotPayload;
     type UpdatePayload;

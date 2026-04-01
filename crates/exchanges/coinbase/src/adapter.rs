@@ -96,7 +96,8 @@ impl CoinbaseAdapter {
                                 levels: BookLevels {
                                     asks: depth.asks,
                                     bids: depth.bids
-                                }
+                                },
+                                checksum: None
                             });
                             send_normalized_event::<CoinbaseAdapter>(&self.normalized_tx, snapshot_event);
                             send_status::<CoinbaseAdapter>(&self.normalized_tx, compute_status(self.live_books, self.book_states.len()));
@@ -124,7 +125,8 @@ impl CoinbaseAdapter {
                                 levels: BookLevels {
                                     asks,
                                     bids
-                                }
+                                },
+                                checksum: None
                             });
                             send_normalized_event::<CoinbaseAdapter>(&self.normalized_tx, update_event);
                         }

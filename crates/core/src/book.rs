@@ -1,7 +1,7 @@
 use std::{cmp::Reverse, collections::BTreeMap, fmt::Display};
 use rust_decimal::Decimal;
 
-use crate::types::{Price, Qty};
+use crate::{helpers::book::{verify_checksum, ChecksumError}, types::{Price, Qty}};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BookLevel {
@@ -86,6 +86,14 @@ impl LocalBook {
                 self.upsert_bid(price, qty);
             }
         }
+    }
+
+    pub fn verify_okx_bitget_checksum(&self, expected: i32) -> Result<(), ChecksumError> {
+        verify_checksum(
+            self.top_n_bid(25),
+            self.top_n_ask(25),
+            expected,
+        )
     }
 
     fn upsert_ask(&mut self, price: Price, qty: Qty) {
