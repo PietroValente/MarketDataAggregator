@@ -175,3 +175,192 @@ impl ExchangeAdapter for BybitAdapter {
         BybitAdapter::run(self)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::thread;
+    use md_core::types::ExchangeStatus;
+    use md_core::types::{Price, Qty};
+    use rust_decimal::Decimal;
+    use tokio::sync::mpsc;
+
+    fn instrument(v: &str) -> Instrument {
+        Instrument(v.to_owned())
+    }
+
+    fn level(px: i64, q: i64) -> (Price, Qty) {
+        (Price(Decimal::new(px, 2)), Qty(Decimal::new(q, 3)))
+    }
+
+    fn message(action: DepthBookAction, symbol: &str, update_id: u64) -> ParsedBookMessage {
+        ParsedBookMessage {
+            topic: "orderbook.50.BTCUSDT".to_owned(),
+            action,
+            ts: 0,
+            cts: 0,
+            data: crate::types::ParsedBookData {
+                symbol: instrument(symbol),
+                bids: vec![level(10000, 1000)],
+                asks: vec![level(10100, 1000)],
+                update_id,
+                sequence: update_id,
+            },
+        }
+    }
+
+    fn raw_depth_msg(action: &str, symbol: &str, update_id: u64) -> BybitMdMsg {
+        let payload = format!(
+            r#"{{"topic":"orderbook.50.{symbol}","type":"{action}","ts":1,"cts":1,"data":{{"s":"{symbol}","b":[["100.00","1.0"]],"a":[["101.00","2.0"]],"u":{update_id},"seq":{update_id}}}}}"#
+        );
+        BybitMdMsg::Raw(md_core::types::RawMdMsg(payload.into_bytes()))
+    }
+
+    #[test]
+    fn snapshot_initializes_once_and_updates_last_update_id() {
+        let (_raw_tx, raw_rx) = mpsc::channel(8);
+        let (normalized_tx, _normalized_rx) = mpsc::channel(8);
+        let (control_tx, _control_rx) = mpsc::channel(8);
+        let mut adapter = BybitAdapter::new(raw_rx, normalized_tx, control_tx);
+        let symbol = instrument("BTCUSDT");
+        adapter.book_states.insert(symbol.clone(), BookState::new());
+
+        adapter
+            .validate_snapshot(&message(DepthBookAction::Snapshot, "BTCUSDT", 10))
+            .unwrap();
+        assert_eq!(adapter.live_books, 1);
+        assert_eq!(adapter.book_states.get(&symbol).unwrap().last_update_id, Some(10));
+
+        // Repeated snapshots should not increase live_books multiple times.
+        adapter
+            .validate_snapshot(&message(DepthBookAction::Snapshot, "BTCUSDT", 15))
+            .unwrap();
+        assert_eq!(adapter.live_books, 1);
+        assert_eq!(adapter.book_states.get(&symbol).unwrap().last_update_id, Some(15));
+    }
+
+    #[test]
+    fn delta_requires_snapshot_before_accepting_updates() {
+        let (_raw_tx, raw_rx) = mpsc::channel(8);
+        let (normalized_tx, _normalized_rx) = mpsc::channel(8);
+        let (control_tx, _control_rx) = mpsc::channel(8);
+        let mut adapter = BybitAdapter::new(raw_rx, normalized_tx, control_tx);
+        adapter.book_states.insert(instrument("BTCUSDT"), BookState::new());
+
+        let err = adapter
+            .validate_update(&message(DepthBookAction::Delta, "BTCUSDT", 1))
+            .expect_err("delta before snapshot must fail");
+        assert!(matches!(err, ValidateBookError::MissingSnapshot));
+    }
+
+    #[test]
+    fn random_delta_sequence_matches_reference_update_id_model() {
+        fn next_u64(state: &mut u64) -> u64 {
+            *state ^= *state << 13;
+            *state ^= *state >> 7;
+            *state ^= *state << 17;
+            *state
+        }
+
+        let (_raw_tx, raw_rx) = mpsc::channel(8);
+        let (normalized_tx, _normalized_rx) = mpsc::channel(8);
+        let (control_tx, _control_rx) = mpsc::channel(8);
+        let mut adapter = BybitAdapter::new(raw_rx, normalized_tx, control_tx);
+        let symbol = instrument("BTCUSDT");
+        adapter.book_states.insert(symbol.clone(), BookState::new());
+
+        adapter
+            .validate_snapshot(&message(DepthBookAction::Snapshot, "BTCUSDT", 1000))
+            .unwrap();
+        let mut ref_last = 1000_u64;
+        let mut seed = 0xB1B1_7001_u64;
+
+        for _ in 0..5000 {
+            let roll = (next_u64(&mut seed) % 100) as u8;
+            let (update_id, expected_ok) = if roll < 35 {
+                let stale = ref_last.saturating_sub((next_u64(&mut seed) % 3) + 1);
+                (stale, false)
+            } else {
+                (ref_last + 1 + (next_u64(&mut seed) % 3), true)
+            };
+
+            let got = adapter.validate_update(&message(DepthBookAction::Delta, "BTCUSDT", update_id));
+            if expected_ok {
+                assert!(got.is_ok(), "increasing update_id must be accepted");
+                ref_last = update_id;
+                assert_eq!(adapter.book_states.get(&symbol).unwrap().last_update_id, Some(ref_last));
+            } else {
+                assert!(matches!(got, Err(ValidateBookError::StaleUpdate { .. })));
+                assert_eq!(adapter.book_states.get(&symbol).unwrap().last_update_id, Some(ref_last));
+            }
+        }
+    }
+
+    #[test]
+    fn run_delta_without_snapshot_triggers_resync_and_emits_update_event() {
+        let (raw_tx, raw_rx) = mpsc::channel(64);
+        let (normalized_tx, mut normalized_rx) = mpsc::channel(64);
+        let (control_tx, mut control_rx) = mpsc::channel(64);
+        let mut adapter = BybitAdapter::new(raw_rx, normalized_tx, control_tx);
+
+        let handle = thread::spawn(move || adapter.run());
+        raw_tx
+            .blocking_send(BybitMdMsg::Instruments(vec![instrument("BTCUSDT")]))
+            .unwrap();
+        raw_tx
+            .blocking_send(raw_depth_msg("delta", "BTCUSDT", 1))
+            .unwrap();
+        drop(raw_tx);
+        handle.join().unwrap();
+
+        assert!(matches!(control_rx.try_recv(), Ok(ControlEvent::Resync)));
+
+        let mut saw_update = false;
+        while let Ok(event) = normalized_rx.try_recv() {
+            if let NormalizedEvent::Book(BookEventType::Update, book) = event.event {
+                if book.instrument == instrument("BTCUSDT") {
+                    saw_update = true;
+                    break;
+                }
+            }
+        }
+        assert!(saw_update, "delta currently emits update event even on validation error");
+    }
+
+    #[test]
+    fn run_reset_restores_initializing_status_progression() {
+        let (raw_tx, raw_rx) = mpsc::channel(64);
+        let (normalized_tx, mut normalized_rx) = mpsc::channel(64);
+        let (control_tx, _control_rx) = mpsc::channel(64);
+        let mut adapter = BybitAdapter::new(raw_rx, normalized_tx, control_tx);
+
+        let handle = thread::spawn(move || adapter.run());
+        raw_tx
+            .blocking_send(BybitMdMsg::Instruments(vec![instrument("BTCUSDT"), instrument("ETHUSDT")]))
+            .unwrap();
+        raw_tx
+            .blocking_send(raw_depth_msg("snapshot", "BTCUSDT", 10))
+            .unwrap();
+        raw_tx.blocking_send(BybitMdMsg::ResetBookState).unwrap();
+        raw_tx
+            .blocking_send(raw_depth_msg("snapshot", "BTCUSDT", 11))
+            .unwrap();
+        drop(raw_tx);
+        handle.join().unwrap();
+
+        let mut init_zero = 0usize;
+        let mut init_half = 0usize;
+        while let Ok(event) = normalized_rx.try_recv() {
+            if let NormalizedEvent::ApplyStatus(status) = event.event {
+                match status {
+                    ExchangeStatus::Initializing(p) if (p - 0.0).abs() < f32::EPSILON => init_zero += 1,
+                    ExchangeStatus::Initializing(p) if (p - 0.5).abs() < f32::EPSILON => init_half += 1,
+                    _ => {}
+                }
+            }
+        }
+
+        assert!(init_zero >= 2, "expected initializing 0.0 before and after reset");
+        assert!(init_half >= 2, "expected initializing 0.5 after snapshots on 1/2 books");
+    }
+}

@@ -232,3 +232,164 @@ impl ExchangeAdapter for BinanceAdapter {
         BinanceAdapter::run(self)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use md_core::types::RawMdMsg;
+    use tokio::sync::mpsc;
+
+    fn instrument(v: &str) -> Instrument {
+        Instrument(v.to_owned())
+    }
+
+    fn make_update_msg(symbol: &str, first_id: u64, final_id: u64, event_type: &str) -> RawMdMsg {
+        let payload = format!(
+            r#"{{"e":"{event_type}","E":1,"s":"{symbol}","U":{first_id},"u":{final_id},"b":[["100.00","1.0"]],"a":[["101.00","2.0"]]}}"#
+        );
+        RawMdMsg(payload.into_bytes())
+    }
+
+    #[test]
+    fn buffered_updates_are_drained_after_snapshot() {
+        // Use a dedicated output channel as adapter.raw_tx so we can assert drained messages.
+        let (drain_tx, mut drain_rx) = mpsc::channel(128);
+        let (_dummy_in_tx, dummy_in_rx) = mpsc::channel(1);
+        let (normalized_tx, _normalized_rx) = mpsc::channel(8);
+        let (control_tx, _control_rx) = mpsc::channel(16);
+        let mut adapter = BinanceAdapter::new(drain_tx, dummy_in_rx, normalized_tx, control_tx);
+        let symbol = instrument("BTCUSDT");
+
+        let book = adapter
+            .book_states
+            .entry(symbol.clone())
+            .or_insert_with(BookState::new);
+        book.symbols_pending_snapshot
+            .push(make_update_msg("BTCUSDT", 101, 101, "depthUpdate"));
+        book.symbols_pending_snapshot
+            .push(make_update_msg("BTCUSDT", 102, 102, "depthUpdate"));
+
+        adapter.drain_buffered_updates(symbol.clone());
+
+        let msg1 = drain_rx.blocking_recv();
+        let msg2 = drain_rx.blocking_recv();
+        assert!(matches!(msg1, Some(BinanceMdMsg::WsMessage(_))));
+        assert!(matches!(msg2, Some(BinanceMdMsg::WsMessage(_))));
+
+        let book = adapter.book_states.get(&symbol).expect("symbol must exist");
+        assert_eq!(book.status, BookSyncStatus::Live);
+        assert!(book.symbols_pending_snapshot.is_empty());
+        assert_eq!(adapter.live_books, 1);
+    }
+
+    #[test]
+    fn validate_update_gap_is_detected_with_expected_values() {
+        let (raw_tx, raw_rx) = mpsc::channel(8);
+        let (normalized_tx, _normalized_rx) = mpsc::channel(8);
+        let (control_tx, _control_rx) = mpsc::channel(8);
+        let mut adapter = BinanceAdapter::new(raw_tx, raw_rx, normalized_tx, control_tx);
+        let symbol = instrument("BTCUSDT");
+
+        adapter.book_states.insert(symbol.clone(), BookState::new());
+        adapter
+            .validate_snapshot(&ValidateSnapshot {
+                symbol: symbol.clone(),
+                last_update_id: 100,
+            })
+            .unwrap();
+
+        let gap_update = ParsedBookUpdate {
+            event_type: "depthUpdate".to_owned(),
+            event_time: 0,
+            symbol,
+            first_update_id: 105,
+            final_update_id: 105,
+            bids: vec![],
+            asks: vec![],
+        };
+        let err = adapter.validate_update(&gap_update).expect_err("gap must fail");
+        match err {
+            ValidateBookError::UpdateGap {
+                event_first_update_id,
+                expected_next_update_id,
+            } => {
+                assert_eq!(event_first_update_id, 105);
+                assert_eq!(expected_next_update_id, 101);
+            }
+            _ => panic!("unexpected error variant"),
+        }
+    }
+
+    #[test]
+    fn validate_update_random_sequence_matches_reference_state_machine() {
+        // Small deterministic RNG to avoid adding dev-dependencies.
+        fn next_u64(state: &mut u64) -> u64 {
+            *state ^= *state << 13;
+            *state ^= *state >> 7;
+            *state ^= *state << 17;
+            *state
+        }
+
+        let (raw_tx, raw_rx) = mpsc::channel(8);
+        let (normalized_tx, _normalized_rx) = mpsc::channel(8);
+        let (control_tx, _control_rx) = mpsc::channel(8);
+        let mut adapter = BinanceAdapter::new(raw_tx, raw_rx, normalized_tx, control_tx);
+        let symbol = instrument("BTCUSDT");
+        adapter.book_states.insert(symbol.clone(), BookState::new());
+
+        // Apply initial snapshot once for update validation.
+        adapter
+            .validate_snapshot(&ValidateSnapshot {
+                symbol: symbol.clone(),
+                last_update_id: 1000,
+            })
+            .unwrap();
+        let mut ref_last = 1000_u64;
+        let mut seed = 0xB1AC_E555_u64;
+
+        for _ in 0..5000 {
+            let roll = (next_u64(&mut seed) % 100) as u8;
+            let (event_type, first_id, final_id, expected_kind) = if roll < 10 {
+                ("other", ref_last + 1, ref_last + 1, "unknown")
+            } else if roll < 35 {
+                // stale update
+                let old = ref_last.saturating_sub((next_u64(&mut seed) % 3) + 1);
+                ("depthUpdate", old, old, "stale")
+            } else if roll < 60 {
+                // gap update
+                let first = ref_last + 2 + (next_u64(&mut seed) % 3);
+                let final_id = first + (next_u64(&mut seed) % 2);
+                ("depthUpdate", first, final_id, "gap")
+            } else {
+                // valid update where first <= ref_last+1 and final > ref_last
+                let first = ref_last + (next_u64(&mut seed) % 2);
+                let final_id = ref_last + 1 + (next_u64(&mut seed) % 3);
+                ("depthUpdate", first, final_id, "ok")
+            };
+
+            let update = ParsedBookUpdate {
+                event_type: event_type.to_string(),
+                event_time: 0,
+                symbol: symbol.clone(),
+                first_update_id: first_id,
+                final_update_id: final_id,
+                bids: vec![],
+                asks: vec![],
+            };
+
+            let got = adapter.validate_update(&update);
+            match expected_kind {
+                "unknown" => assert!(matches!(got, Err(ValidateBookError::UnknownType(_)))),
+                "stale" => assert!(matches!(got, Err(ValidateBookError::StaleUpdate { .. }))),
+                "gap" => assert!(matches!(got, Err(ValidateBookError::UpdateGap { .. }))),
+                "ok" => {
+                    assert!(got.is_ok(), "valid update should be accepted");
+                    ref_last = final_id;
+                    let state_last = adapter.book_states.get(&symbol).unwrap().last_applied_update_id;
+                    assert_eq!(state_last, Some(ref_last));
+                }
+                _ => unreachable!(),
+            }
+        }
+    }
+}

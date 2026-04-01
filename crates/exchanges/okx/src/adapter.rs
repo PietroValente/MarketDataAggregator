@@ -192,3 +192,199 @@ impl ExchangeAdapter for OkxAdapter {
         OkxAdapter::run(self)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::thread;
+    use md_core::types::{Price, Qty};
+    use rust_decimal::Decimal;
+    use tokio::sync::mpsc;
+
+    fn instrument(v: &str) -> Instrument {
+        Instrument(v.to_owned())
+    }
+
+    fn level(px: i64, q: i64) -> (Price, Qty) {
+        (Price(Decimal::new(px, 2)), Qty(Decimal::new(q, 3)))
+    }
+
+    fn msg(symbol: &str, seq_id: u64, prev_seq_id: i64) -> ParsedBookMessage {
+        ParsedBookMessage {
+            arg: crate::types::SymbolParam {
+                channel: "books".to_owned(),
+                inst_id: instrument(symbol),
+            },
+            action: DepthBookAction::Update,
+            data: vec![crate::types::ParsedBookData {
+                asks: vec![level(10100, 1000)],
+                bids: vec![level(10000, 1000)],
+                ts: "0".to_owned(),
+                checksum: 1,
+                seq_id,
+                prev_seq_id,
+            }],
+        }
+    }
+
+    fn snapshot_msg(symbol: &str, seq_id: u64) -> ParsedBookMessage {
+        ParsedBookMessage {
+            arg: crate::types::SymbolParam {
+                channel: "books".to_owned(),
+                inst_id: instrument(symbol),
+            },
+            action: DepthBookAction::Snapshot,
+            data: vec![crate::types::ParsedBookData {
+                asks: vec![level(10100, 1000)],
+                bids: vec![level(10000, 1000)],
+                ts: "0".to_owned(),
+                checksum: 1,
+                seq_id,
+                prev_seq_id: seq_id as i64,
+            }],
+        }
+    }
+
+    fn raw_depth_msg(action: &str, seq_id: u64, prev_seq_id: i64) -> OkxMdMsg {
+        let payload = format!(
+            r#"{{"arg":{{"channel":"books","instId":"BTCUSDT"}},"action":"{action}","data":[{{"asks":[["101.00","1.0","0","1"]],"bids":[["100.00","1.0","0","1"]],"ts":"1","checksum":1,"seqId":{seq_id},"prevSeqId":{prev_seq_id}}}]}}"#
+        );
+        OkxMdMsg::Raw(md_core::types::RawMdMsg(payload.into_bytes()))
+    }
+
+    #[test]
+    fn snapshot_initialization_is_idempotent_and_sets_prev_seq() {
+        let (_raw_tx, raw_rx) = mpsc::channel(8);
+        let (normalized_tx, _normalized_rx) = mpsc::channel(8);
+        let (control_tx, _control_rx) = mpsc::channel(8);
+        let mut adapter = OkxAdapter::new(raw_rx, normalized_tx, control_tx);
+        let symbol = instrument("BTCUSDT");
+        adapter.book_states.insert(symbol.clone(), BookState::new());
+
+        adapter.validate_snapshot(&snapshot_msg("BTCUSDT", 100)).unwrap();
+        assert_eq!(adapter.live_books, 1);
+        assert_eq!(adapter.book_states.get(&symbol).unwrap().prev_seq_id, Some(100));
+
+        adapter.validate_snapshot(&snapshot_msg("BTCUSDT", 120)).unwrap();
+        assert_eq!(adapter.live_books, 1);
+        assert_eq!(adapter.book_states.get(&symbol).unwrap().prev_seq_id, Some(120));
+    }
+
+    #[test]
+    fn update_detects_missing_snapshot_stale_and_gap() {
+        let (_raw_tx, raw_rx) = mpsc::channel(8);
+        let (normalized_tx, _normalized_rx) = mpsc::channel(8);
+        let (control_tx, _control_rx) = mpsc::channel(8);
+        let mut adapter = OkxAdapter::new(raw_rx, normalized_tx, control_tx);
+        adapter.book_states.insert(instrument("BTCUSDT"), BookState::new());
+
+        let missing = adapter
+            .validate_update(&msg("BTCUSDT", 101, 100))
+            .expect_err("update before snapshot must fail");
+        assert!(matches!(missing, ValidateBookError::MissingSnapshot));
+
+        adapter.validate_snapshot(&snapshot_msg("BTCUSDT", 100)).unwrap();
+
+        let stale = adapter
+            .validate_update(&msg("BTCUSDT", 101, 99))
+            .expect_err("event prev lower than expected must fail");
+        assert!(matches!(stale, ValidateBookError::StaleUpdate { .. }));
+
+        let gap = adapter
+            .validate_update(&msg("BTCUSDT", 101, 101))
+            .expect_err("event prev higher than expected must fail");
+        assert!(matches!(gap, ValidateBookError::UpdateGap { .. }));
+    }
+
+    #[test]
+    fn random_prev_seq_transitions_match_reference_model() {
+        fn next_u64(state: &mut u64) -> u64 {
+            *state ^= *state << 13;
+            *state ^= *state >> 7;
+            *state ^= *state << 17;
+            *state
+        }
+
+        let (_raw_tx, raw_rx) = mpsc::channel(8);
+        let (normalized_tx, _normalized_rx) = mpsc::channel(8);
+        let (control_tx, _control_rx) = mpsc::channel(8);
+        let mut adapter = OkxAdapter::new(raw_rx, normalized_tx, control_tx);
+        let symbol = instrument("BTCUSDT");
+        adapter.book_states.insert(symbol.clone(), BookState::new());
+        adapter.validate_snapshot(&snapshot_msg("BTCUSDT", 1000)).unwrap();
+
+        let mut ref_prev = 1000_u64;
+        let mut seed = 0x0A55_A11C_u64;
+
+        for _ in 0..5000 {
+            let roll = (next_u64(&mut seed) % 100) as u8;
+            let (event_prev, next_seq, expected) = if roll < 30 {
+                (ref_prev.saturating_sub(1 + (next_u64(&mut seed) % 2)), ref_prev + 1, "stale")
+            } else if roll < 60 {
+                (ref_prev + 1 + (next_u64(&mut seed) % 2), ref_prev + 2, "gap")
+            } else {
+                (ref_prev, ref_prev + 1 + (next_u64(&mut seed) % 3), "ok")
+            };
+
+            let got = adapter.validate_update(&msg("BTCUSDT", next_seq, event_prev as i64));
+            match expected {
+                "stale" => {
+                    assert!(matches!(got, Err(ValidateBookError::StaleUpdate { .. })));
+                    assert_eq!(adapter.book_states.get(&symbol).unwrap().prev_seq_id, Some(ref_prev));
+                }
+                "gap" => {
+                    assert!(matches!(got, Err(ValidateBookError::UpdateGap { .. })));
+                    assert_eq!(adapter.book_states.get(&symbol).unwrap().prev_seq_id, Some(ref_prev));
+                }
+                "ok" => {
+                    assert!(got.is_ok(), "matching prev_seq should pass");
+                    ref_prev = next_seq;
+                    assert_eq!(adapter.book_states.get(&symbol).unwrap().prev_seq_id, Some(ref_prev));
+                }
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    #[test]
+    fn run_stale_update_is_dropped_while_gap_triggers_resync_and_emits_update() {
+        let (raw_tx, raw_rx) = mpsc::channel(128);
+        let (normalized_tx, mut normalized_rx) = mpsc::channel(128);
+        let (control_tx, mut control_rx) = mpsc::channel(128);
+        let mut adapter = OkxAdapter::new(raw_rx, normalized_tx, control_tx);
+
+        let handle = thread::spawn(move || adapter.run());
+        raw_tx
+            .blocking_send(OkxMdMsg::Instruments(vec![instrument("BTCUSDT")]))
+            .unwrap();
+        raw_tx
+            .blocking_send(raw_depth_msg("snapshot", 100, 100))
+            .unwrap();
+        // stale (event prev < book prev) -> dropped, no resync
+        raw_tx
+            .blocking_send(raw_depth_msg("update", 101, 99))
+            .unwrap();
+        // gap (event prev > book prev) -> resync + update emitted
+        raw_tx
+            .blocking_send(raw_depth_msg("update", 102, 101))
+            .unwrap();
+        drop(raw_tx);
+        handle.join().unwrap();
+
+        let mut resync_count = 0usize;
+        while matches!(control_rx.try_recv(), Ok(ControlEvent::Resync)) {
+            resync_count += 1;
+        }
+        assert_eq!(resync_count, 1, "only gap should trigger resync");
+
+        let mut update_count = 0usize;
+        while let Ok(event) = normalized_rx.try_recv() {
+            if let NormalizedEvent::Book(BookEventType::Update, book) = event.event {
+                if book.instrument == instrument("BTCUSDT") {
+                    update_count += 1;
+                }
+            }
+        }
+        assert_eq!(update_count, 1, "stale update must be dropped, gap update emitted");
+    }
+}

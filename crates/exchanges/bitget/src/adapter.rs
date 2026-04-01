@@ -193,3 +193,120 @@ impl ExchangeAdapter for BitgetAdapter {
         BitgetAdapter::run(self)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use md_core::types::{Price, Qty};
+    use rust_decimal::Decimal;
+    use tokio::sync::mpsc;
+
+    fn instrument(v: &str) -> Instrument {
+        Instrument(v.to_owned())
+    }
+
+    fn level(px: i64, q: i64) -> (Price, Qty) {
+        (Price(Decimal::new(px, 2)), Qty(Decimal::new(q, 3)))
+    }
+
+    fn message(action: DepthBookAction, inst: &str, seq: u64, data_ts: &str) -> ParsedBookMessage {
+        ParsedBookMessage {
+            action,
+            arg: crate::types::SymbolParam {
+                inst_type: "SPOT".to_owned(),
+                channel: "books".to_owned(),
+                inst_id: instrument(inst),
+            },
+            data: vec![crate::types::ParsedBookData {
+                asks: vec![level(10100, 1000)],
+                bids: vec![level(10000, 1000)],
+                checksum: 1,
+                seq,
+                ts: data_ts.to_owned(),
+            }],
+            ts: 0,
+        }
+    }
+
+    #[test]
+    fn snapshot_initializes_once_and_updates_last_seq() {
+        let (_raw_tx, raw_rx) = mpsc::channel(8);
+        let (normalized_tx, _normalized_rx) = mpsc::channel(8);
+        let (control_tx, _control_rx) = mpsc::channel(8);
+        let mut adapter = BitgetAdapter::new(raw_rx, normalized_tx, control_tx);
+        let symbol = instrument("BTCUSDT");
+        adapter.book_states.insert(symbol.clone(), BookState::new());
+
+        adapter
+            .validate_snapshot(&message(DepthBookAction::Snapshot, "BTCUSDT", 10, "0"))
+            .unwrap();
+        assert_eq!(adapter.live_books, 1);
+        assert_eq!(adapter.book_states.get(&symbol).unwrap().last_seq, Some(10));
+
+        // Second snapshot for same symbol must not double-count live book.
+        adapter
+            .validate_snapshot(&message(DepthBookAction::Snapshot, "BTCUSDT", 15, "0"))
+            .unwrap();
+        assert_eq!(adapter.live_books, 1);
+        assert_eq!(adapter.book_states.get(&symbol).unwrap().last_seq, Some(15));
+    }
+
+    #[test]
+    fn update_requires_snapshot_before_accepting_data() {
+        let (_raw_tx, raw_rx) = mpsc::channel(8);
+        let (normalized_tx, _normalized_rx) = mpsc::channel(8);
+        let (control_tx, _control_rx) = mpsc::channel(8);
+        let mut adapter = BitgetAdapter::new(raw_rx, normalized_tx, control_tx);
+        adapter.book_states.insert(instrument("BTCUSDT"), BookState::new());
+
+        let err = adapter
+            .validate_update(&message(DepthBookAction::Update, "BTCUSDT", 1, "0"))
+            .expect_err("update before snapshot must fail");
+        assert!(matches!(err, ValidateBookError::MissingSnapshot));
+    }
+
+    #[test]
+    fn random_update_sequence_matches_reference_last_seq_model() {
+        fn next_u64(state: &mut u64) -> u64 {
+            *state ^= *state << 13;
+            *state ^= *state >> 7;
+            *state ^= *state << 17;
+            *state
+        }
+
+        let (_raw_tx, raw_rx) = mpsc::channel(8);
+        let (normalized_tx, _normalized_rx) = mpsc::channel(8);
+        let (control_tx, _control_rx) = mpsc::channel(8);
+        let mut adapter = BitgetAdapter::new(raw_rx, normalized_tx, control_tx);
+        let symbol = instrument("BTCUSDT");
+        adapter.book_states.insert(symbol.clone(), BookState::new());
+
+        adapter
+            .validate_snapshot(&message(DepthBookAction::Snapshot, "BTCUSDT", 1000, "0"))
+            .unwrap();
+        let mut ref_last = 1000_u64;
+        let mut seed = 0xB175_E7A7_u64;
+
+        for _ in 0..5000 {
+            let roll = (next_u64(&mut seed) % 100) as u8;
+            let (seq, expected_ok) = if roll < 35 {
+                // stale
+                let old = ref_last.saturating_sub((next_u64(&mut seed) % 3) + 1);
+                (old, false)
+            } else {
+                // valid strictly increasing sequence
+                (ref_last + 1 + (next_u64(&mut seed) % 3), true)
+            };
+
+            let got = adapter.validate_update(&message(DepthBookAction::Update, "BTCUSDT", seq, "0"));
+            if expected_ok {
+                assert!(got.is_ok(), "strictly increasing sequence must be accepted");
+                ref_last = seq;
+                assert_eq!(adapter.book_states.get(&symbol).unwrap().last_seq, Some(ref_last));
+            } else {
+                assert!(matches!(got, Err(ValidateBookError::StaleUpdate { .. })));
+                assert_eq!(adapter.book_states.get(&symbol).unwrap().last_seq, Some(ref_last));
+            }
+        }
+    }
+}

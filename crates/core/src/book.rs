@@ -244,6 +244,62 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_prices_in_single_update_follow_last_write_wins() {
+        let mut book = LocalBook::new();
+        book.apply_snapshot(BookLevels {
+            asks: vec![(price(10000), qty(1000))],
+            bids: vec![(price(9900), qty(1000))],
+        });
+
+        // Same price repeated in one batch should be processed in order.
+        book.apply_update(BookLevels {
+            asks: vec![
+                (price(10000), qty(0)),     // remove existing
+                (price(10000), qty(1200)),  // reinsert
+                (price(10000), qty(1300)),  // replace again (final value)
+            ],
+            bids: vec![
+                (price(9900), qty(1400)),   // replace existing
+                (price(9900), qty(0)),      // remove
+                (price(9900), qty(1500)),   // reinsert (final value)
+            ],
+        });
+
+        assert_eq!(
+            book.top_n_ask(1),
+            vec![BookLevel::new(qty(1300), price(10000))]
+        );
+        assert_eq!(
+            book.top_n_bid(1),
+            vec![BookLevel::new(qty(1500), price(9900))]
+        );
+    }
+
+    #[test]
+    fn removing_nonexistent_levels_is_noop() {
+        let mut book = LocalBook::new();
+        book.apply_snapshot(BookLevels {
+            asks: vec![(price(10100), qty(1000))],
+            bids: vec![(price(9900), qty(2000))],
+        });
+
+        // Removing prices that are not present should not mutate existing state.
+        book.apply_update(BookLevels {
+            asks: vec![(price(10500), qty(0))],
+            bids: vec![(price(9500), qty(0))],
+        });
+
+        assert_eq!(
+            book.top_n_ask(10),
+            vec![BookLevel::new(qty(1000), price(10100))]
+        );
+        assert_eq!(
+            book.top_n_bid(10),
+            vec![BookLevel::new(qty(2000), price(9900))]
+        );
+    }
+
+    #[test]
     fn random_updates_match_reference_model_under_stress() {
         use rand::{Rng, SeedableRng, rngs::StdRng};
 
