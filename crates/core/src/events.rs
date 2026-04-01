@@ -55,5 +55,6 @@ pub struct PingMsg {
 pub enum InboundEvent {
     WsMessage(RawMdMsg),
     Ping(PingMsg),
+    ClearBookState,
     ConnectionClosed
 }

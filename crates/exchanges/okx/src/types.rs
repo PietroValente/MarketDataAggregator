@@ -12,6 +12,7 @@ use url::Url;
 pub enum OkxMdMsg {
     Instruments(Vec<Instrument>),
     Raw(RawMdMsg),
+    ClearBookState
 }
 
 /* Connector/API configuration and subscription payloads */

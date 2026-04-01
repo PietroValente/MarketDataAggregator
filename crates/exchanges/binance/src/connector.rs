@@ -36,7 +36,7 @@ impl BinanceConnector {
             ws_url.clone(),
             Some(snapshot_url),
             subscriptions_payloads,
-            inbound_tx,
+            inbound_tx.clone(),
             Some(raw_tx.clone()),
             manager_tx.clone(),
             manager_rx,
@@ -45,7 +45,8 @@ impl BinanceConnector {
 
         tokio::spawn(control_manager_task::<BinanceConnector>(
             control_rx, 
-            manager_tx.clone()
+            manager_tx.clone(),
+            inbound_tx
         ));
 
         Ok(Self {
@@ -133,6 +134,12 @@ impl BinanceConnector {
         }
         while let Some(msg) = self.inbound_rx.recv().await {
             match msg {
+                InboundEvent::ClearBookState => {
+                    if let Err(e) = self.raw_tx.send(BinanceMdMsg::ClearBookState).await {
+                        error!(exchange = ?BinanceConnector::exchange(), component = ?BinanceConnector::component(), error = ?e, "error while sending the ClearBookState command");
+                        continue;
+                    }
+                },
                 InboundEvent::WsMessage(payload) => {
                     if let Err(e) = self.raw_tx.send(BinanceMdMsg::WsMessage(payload)).await {
                         error!(exchange = ?BinanceConnector::exchange(), component = ?BinanceConnector::component(), error = ?e, "error while sending the update message");

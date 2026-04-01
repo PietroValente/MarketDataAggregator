@@ -35,7 +35,7 @@ impl OkxConnector {
             ws_url.clone(),
             None,
             subscriptions_payloads,
-            inbound_tx,
+            inbound_tx.clone(),
             None,
             manager_tx.clone(),
             manager_rx,
@@ -44,7 +44,8 @@ impl OkxConnector {
 
         tokio::spawn(control_manager_task::<OkxConnector>(
             control_rx, 
-            manager_tx.clone()
+            manager_tx.clone(),
+            inbound_tx
         ));
 
         Ok(Self {
@@ -127,6 +128,12 @@ impl OkxConnector {
         }
         while let Some(msg) = self.inbound_rx.recv().await {
             match msg {
+                InboundEvent::ClearBookState => {
+                    if let Err(e) = self.raw_tx.send(OkxMdMsg::ClearBookState).await {
+                        error!(exchange = ?OkxConnector::exchange(), component = ?OkxConnector::component(), error = ?e, "error while sending the ClearBookState command");
+                        continue;
+                    }
+                },
                 InboundEvent::WsMessage(payload) => {
                     if let Err(e) = self.raw_tx.send(OkxMdMsg::Raw(payload)).await {
                         error!(exchange = ?OkxConnector::exchange(), component = ?OkxConnector::component(), error = ?e, "error while sending the ws message");

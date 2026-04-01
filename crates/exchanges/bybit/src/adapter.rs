@@ -91,6 +91,9 @@ impl BybitAdapter {
     pub fn run(&mut self) {
         while let Some(msg) = self.raw_rx.blocking_recv() {
             match msg {
+                BybitMdMsg::ClearBookState => {
+                    self.clear_book_state();
+                },
                 BybitMdMsg::Instruments(symbols) => {
                     for i in symbols.iter() {
                         self.book_states.insert(i.clone(), BookState::new());
@@ -119,7 +122,6 @@ impl BybitAdapter {
                                 DepthBookAction::Snapshot => {
                                     if let Err(e) = self.validate_snapshot(&depth) {
                                         error!(exchange = ?BybitAdapter::exchange(), component = ?BybitAdapter::component(), symbol = ?depth.data.symbol, error = ?e, "error while validating snapshot");
-                                        self.clear_book_state();
                                         if let Err(e) = self.control_tx.blocking_send(ControlEvent::Resync) {
                                             error!(exchange = ?BybitAdapter::exchange(), component = ?BybitAdapter::component(), error = ?e, "error while sending resync");
                                         }
@@ -169,7 +171,6 @@ impl BybitAdapter {
                                         },
                                         Err(e) => {
                                             error!(exchange = ?BybitAdapter::exchange(), component = ?BybitAdapter::component(), symbol = ?depth.data.symbol, error = ?e, "error while validating update");
-                                            self.clear_book_state();
                                             if let Err(e) = self.control_tx.blocking_send(ControlEvent::Resync) {
                                                 error!(exchange = ?BybitAdapter::exchange(), component = ?BybitAdapter::component(), error = ?e, "error while sending resync");
                                             }

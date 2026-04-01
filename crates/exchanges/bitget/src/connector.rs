@@ -35,7 +35,7 @@ impl BitgetConnector {
             ws_url.clone(),
             None,
             subscriptions_payloads,
-            inbound_tx,
+            inbound_tx.clone(),
             None,
             manager_tx.clone(),
             manager_rx,
@@ -43,8 +43,9 @@ impl BitgetConnector {
         ));
 
         tokio::spawn(control_manager_task::<BitgetConnector>(
-            control_rx, 
-            manager_tx.clone()
+            control_rx,
+            manager_tx.clone(),
+            inbound_tx
         ));
 
         Ok(Self {
@@ -126,6 +127,12 @@ impl BitgetConnector {
         }
         while let Some(msg) = self.inbound_rx.recv().await {
             match msg {
+                InboundEvent::ClearBookState => {
+                    if let Err(e) = self.raw_tx.send(BitgetMdMsg::ClearBookState).await {
+                        error!(exchange = ?BitgetConnector::exchange(), component = ?BitgetConnector::component(), error = ?e, "error while sending the ClearBookState command");
+                        continue;
+                    }
+                },
                 InboundEvent::WsMessage(payload) => {
                     if let Err(e) = self.raw_tx.send(BitgetMdMsg::Raw(payload)).await {
                         error!(exchange = ?BitgetConnector::exchange(), component = ?BitgetConnector::component(), error = ?e, "error while sending the ws message");

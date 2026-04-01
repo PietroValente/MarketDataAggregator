@@ -101,18 +101,25 @@ pub async fn writer_task(
 /// Listens for high-level control signals (e.g. resync requests) coming from
 /// connectors and translates them into `ManagerCommand`s for the manager loop.
 /// This acts as a lightweight bridge between runtime events and orchestration logic.
-pub async fn control_manager_task<T>(mut control_rx: Receiver<ControlEvent>, manager_tx: Sender<ManagerCommand>)
+pub async fn control_manager_task<T>(mut control_rx: Receiver<ControlEvent>, manager_tx: Sender<ManagerCommand>, inbound_tx: Sender<InboundEvent>)
 where
     T: ExchangeConnector
 {
     while let Some(event) = control_rx.recv().await {
         match event {
             ControlEvent::Resync => {
+                if let Err(e) = inbound_tx
+                    .send(InboundEvent::ClearBookState)
+                    .await
+                {
+                    error!(exchange = ?T::exchange(), component = ?T::component(), error = ?e, "failed to send ClearBookState");
+                }
                 if let Err(e) = manager_tx
                     .send(ManagerCommand::RecreateWithSnapshots)
-                    .await {
-                        error!(exchange = ?T::exchange(), component = ?T::component(), error = ?e, "failed to send RecreateWithSnapshots command to manager");
-                    }
+                    .await
+                {
+                    error!(exchange = ?T::exchange(), component = ?T::component(), error = ?e, "failed to send RecreateWithSnapshots command to manager");
+                }
             }
         }
     }

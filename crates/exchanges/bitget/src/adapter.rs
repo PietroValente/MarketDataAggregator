@@ -97,6 +97,9 @@ impl BitgetAdapter {
     pub fn run(&mut self) {
         while let Some(msg) = self.raw_rx.blocking_recv() {
             match msg {
+                BitgetMdMsg::ClearBookState => {
+                    self.clear_book_state();
+                },
                 BitgetMdMsg::Instruments(symbols) => {
                     for i in symbols.iter() {
                         self.book_states.insert(i.clone(), BookState::new());
@@ -125,9 +128,7 @@ impl BitgetAdapter {
                             match action {
                                 DepthBookAction::Snapshot => {
                                     if let Err(e) = self.validate_snapshot(&depth) {
-                                        error!(exchange = ?BitgetAdapter::exchange(), component = ?BitgetAdapter::component(), symbol = ?inst_id, error = ?e, "error while validating snapshot");
-                                        self.clear_book_state();
-                                        if let Err(e) = self.control_tx.blocking_send(ControlEvent::Resync) {
+                                        error!(exchange = ?BitgetAdapter::exchange(), component = ?BitgetAdapter::component(), symbol = ?inst_id, error = ?e, "error while validating snapshot");                                        if let Err(e) = self.control_tx.blocking_send(ControlEvent::Resync) {
                                             error!(exchange = ?BitgetAdapter::exchange(), component = ?BitgetAdapter::component(), error = ?e, "error while sending resync");
                                         }
                                     }
@@ -177,7 +178,6 @@ impl BitgetAdapter {
                                         },
                                         Err(e) => {
                                             error!(exchange = ?BitgetAdapter::exchange(), component = ?BitgetAdapter::component(), symbol = ?inst_id, error = ?e, "error while validating update");
-                                            self.clear_book_state();
                                             if let Err(e) = self.control_tx.blocking_send(ControlEvent::Resync) {
                                                 error!(exchange = ?BitgetAdapter::exchange(), component = ?BitgetAdapter::component(), error = ?e, "error while sending resync");
                                             }

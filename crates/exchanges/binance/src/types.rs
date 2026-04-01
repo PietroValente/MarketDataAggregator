@@ -13,6 +13,7 @@ pub enum BinanceMdMsg {
     Instruments(Vec<Instrument>),
     Snapshot(SnapshotMsg),
     WsMessage(RawMdMsg),
+    ClearBookState
 }
 
 pub struct SnapshotMsg {

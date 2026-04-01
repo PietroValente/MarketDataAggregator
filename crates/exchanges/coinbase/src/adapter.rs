@@ -79,6 +79,9 @@ impl CoinbaseAdapter {
     pub fn run(&mut self) {
         while let Some(msg) = self.raw_rx.blocking_recv() {
             match msg {
+                CoinbaseMdMsg::ClearBookState => {
+                    self.clear_book_state();
+                },
                 CoinbaseMdMsg::Instruments(symbols) => {
                     for i in symbols.iter() {
                         self.book_states.insert(i.clone(), BookState::new());
@@ -104,7 +107,6 @@ impl CoinbaseAdapter {
                             let inst_id = depth.product_id.replace("-", "");
                             if let Err(e) = self.validate_snapshot(&depth) {
                                 error!(exchange = ?CoinbaseAdapter::exchange(), component = ?CoinbaseAdapter::component(), error = ?e, "error while validating snapshot");
-                                self.clear_book_state();
                                 if let Err(e) = self.control_tx.blocking_send(ControlEvent::Resync) {
                                     error!(exchange = ?CoinbaseAdapter::exchange(), component = ?CoinbaseAdapter::component(), error = ?e, "error while sending resync");
                                 }

@@ -12,6 +12,7 @@ use url::Url;
 pub enum BybitMdMsg {
     Instruments(Vec<Instrument>),
     Raw(RawMdMsg),
+    ClearBookState
 }
 
 /* Connector/API configuration and subscription payloads */

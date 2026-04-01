@@ -35,7 +35,7 @@ impl CoinbaseConnector {
             ws_url.clone(),
             None,
             subscriptions_payloads,
-            inbound_tx,
+            inbound_tx.clone(),
             None,
             manager_tx.clone(),
             manager_rx,
@@ -44,7 +44,8 @@ impl CoinbaseConnector {
 
         tokio::spawn(control_manager_task::<CoinbaseConnector>(
             control_rx, 
-            manager_tx.clone()
+            manager_tx.clone(),
+            inbound_tx
         ));
 
         Ok(Self {
@@ -122,6 +123,12 @@ impl CoinbaseConnector {
         }
         while let Some(msg) = self.inbound_rx.recv().await {
             match msg {
+                InboundEvent::ClearBookState => {
+                    if let Err(e) = self.raw_tx.send(CoinbaseMdMsg::ClearBookState).await {
+                        error!(exchange = ?CoinbaseConnector::exchange(), component = ?CoinbaseConnector::component(), error = ?e, "error while sending the ClearBookState command");
+                        continue;
+                    }
+                },
                 InboundEvent::WsMessage(payload) => {
                     if let Err(e) = self.raw_tx.send(CoinbaseMdMsg::Raw(payload)).await {
                         error!(exchange = ?CoinbaseConnector::exchange(), component = ?CoinbaseConnector::component(), error = ?e, "error while sending the ws message");

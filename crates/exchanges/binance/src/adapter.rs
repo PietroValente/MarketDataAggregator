@@ -110,6 +110,9 @@ impl BinanceAdapter {
     pub fn run(&mut self) {
         while let Some(msg) = self.raw_rx.blocking_recv() {
             match msg {
+                BinanceMdMsg::ClearBookState => {
+                    self.clear_book_state();
+                },
                 BinanceMdMsg::Instruments(list) => {
                     for i in list.iter() {
                         self.book_states.insert(i.clone(), BookState::new());
@@ -132,8 +135,7 @@ impl BinanceAdapter {
                         symbol: payload.symbol.clone(),
                         last_update_id: parsed_snapshot.last_update_id
                     }) {
-                        error!(exchange = ?BinanceAdapter::exchange(), component = ?BinanceAdapter::component(), symbol = ?payload.symbol, error = ?e, "error while validating snapshot");
-                        self.clear_book_state();
+                        error!(exchange = ?BinanceAdapter::exchange(), component = ?BinanceAdapter::component(), symbol = ?payload.symbol, error = ?e, "error while validating snapshot");                     
                         if let Err(e) = self.control_tx.blocking_send(ControlEvent::Resync) {
                             error!(exchange = ?BinanceAdapter::exchange(), component = ?BinanceAdapter::component(), error = ?e, "error while sending resync");
                         }
@@ -210,7 +212,6 @@ impl BinanceAdapter {
                                         expected_next_update_id = expected_next_update_id,
                                         "error while validating update"
                                     );
-                                    self.clear_book_state();
                                     if let Err(e) = self.control_tx.blocking_send(ControlEvent::Resync) {
                                         error!(
                                             exchange = ?BinanceAdapter::exchange(),

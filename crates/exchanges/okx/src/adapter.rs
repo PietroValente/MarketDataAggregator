@@ -95,6 +95,9 @@ impl OkxAdapter {
     pub fn run(&mut self) {
         while let Some(msg) = self.raw_rx.blocking_recv() {
             match msg {
+                OkxMdMsg::ClearBookState => {
+                    self.clear_book_state();
+                },
                 OkxMdMsg::Instruments(symbols) => {
                     for i in symbols.iter() {
                         self.book_states.insert(i.clone(), BookState::new());
@@ -124,7 +127,6 @@ impl OkxAdapter {
                                 DepthBookAction::Snapshot => {
                                     if let Err(e) = self.validate_snapshot(&depth) {
                                         error!(exchange = ?OkxAdapter::exchange(), component = ?OkxAdapter::component(), error = ?e, "error while validating snapshot");
-                                        self.clear_book_state();
                                         if let Err(e) = self.control_tx.blocking_send(ControlEvent::Resync) {
                                             error!(exchange = ?OkxAdapter::exchange(), component = ?OkxAdapter::component(), error = ?e, "error while sending resync");
                                         }
@@ -175,7 +177,6 @@ impl OkxAdapter {
                                         },
                                         Err(e) => {
                                             error!(exchange = ?OkxAdapter::exchange(), component = ?OkxAdapter::component(), symbol = ?inst_id, error = ?e, "error while validating update");
-                                            self.clear_book_state();
                                             if let Err(e) = self.control_tx.blocking_send(ControlEvent::Resync) {
                                                 error!(exchange = ?OkxAdapter::exchange(), component = ?OkxAdapter::component(), error = ?e, "error while sending resync");
                                             }
