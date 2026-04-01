@@ -129,7 +129,7 @@ impl OkxConnector {
         while let Some(msg) = self.inbound_rx.recv().await {
             match msg {
                 InboundEvent::ClearBookState => {
-                    if let Err(e) = self.raw_tx.send(OkxMdMsg::ClearBookState).await {
+                    if let Err(e) = self.raw_tx.send(OkxMdMsg::ResetBookState).await {
                         error!(exchange = ?OkxConnector::exchange(), component = ?OkxConnector::component(), error = ?e, "error while sending the ClearBookState command");
                         continue;
                     }

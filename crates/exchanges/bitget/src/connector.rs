@@ -128,7 +128,7 @@ impl BitgetConnector {
         while let Some(msg) = self.inbound_rx.recv().await {
             match msg {
                 InboundEvent::ClearBookState => {
-                    if let Err(e) = self.raw_tx.send(BitgetMdMsg::ClearBookState).await {
+                    if let Err(e) = self.raw_tx.send(BitgetMdMsg::ResetBookState).await {
                         error!(exchange = ?BitgetConnector::exchange(), component = ?BitgetConnector::component(), error = ?e, "error while sending the ClearBookState command");
                         continue;
                     }

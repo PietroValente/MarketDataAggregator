@@ -13,7 +13,7 @@ pub enum BinanceMdMsg {
     Instruments(Vec<Instrument>),
     Snapshot(SnapshotMsg),
     WsMessage(RawMdMsg),
-    ClearBookState
+    ResetBookState
 }
 
 pub struct SnapshotMsg {
@@ -67,12 +67,14 @@ pub struct DepthQuery<'a> {
 
 /* Book state and sync flow */
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Default)]
 pub enum BookSyncStatus {
+    #[default]
     WaitingSnapshot,
-    Live,
+    Live
 }
 
+#[derive(Default)]
 pub struct BookState {
     pub status: BookSyncStatus,
     pub last_applied_update_id: Option<u64>,

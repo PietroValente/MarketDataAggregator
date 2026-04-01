@@ -12,7 +12,7 @@ use url::Url;
 pub enum CoinbaseMdMsg {
     Instruments(Vec<Instrument>),
     Raw(RawMdMsg),
-    ClearBookState
+    ResetBookState
 }
 
 /* Connector/API configuration and subscription payloads */
@@ -54,6 +54,7 @@ pub struct SymbolParam {
 
 /* Book state and sync flow */
 
+#[derive(Default)]
 pub struct BookState {
     pub initialized: bool,
 }

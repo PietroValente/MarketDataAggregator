@@ -135,7 +135,7 @@ impl BinanceConnector {
         while let Some(msg) = self.inbound_rx.recv().await {
             match msg {
                 InboundEvent::ClearBookState => {
-                    if let Err(e) = self.raw_tx.send(BinanceMdMsg::ClearBookState).await {
+                    if let Err(e) = self.raw_tx.send(BinanceMdMsg::ResetBookState).await {
                         error!(exchange = ?BinanceConnector::exchange(), component = ?BinanceConnector::component(), error = ?e, "error while sending the ClearBookState command");
                         continue;
                     }

@@ -12,7 +12,7 @@ use url::Url;
 pub enum BitgetMdMsg {
     Instruments(Vec<Instrument>),
     Raw(RawMdMsg),
-    ClearBookState
+    ResetBookState
 }
 
 /* Connector/API configuration and subscription payloads */
@@ -58,6 +58,7 @@ pub struct SymbolParam {
 
 /* Book state and sync flow */
 
+#[derive(Default)]
 pub struct BookState {
     pub initialized: bool,
     pub last_seq: Option<u64>,

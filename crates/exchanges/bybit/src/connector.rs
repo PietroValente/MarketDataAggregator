@@ -129,7 +129,7 @@ impl BybitConnector {
         while let Some(msg) = self.inbound_rx.recv().await {
             match msg {
                 InboundEvent::ClearBookState => {
-                    if let Err(e) = self.raw_tx.send(BybitMdMsg::ClearBookState).await {
+                    if let Err(e) = self.raw_tx.send(BybitMdMsg::ResetBookState).await {
                         error!(exchange = ?BybitConnector::exchange(), component = ?BybitConnector::component(), error = ?e, "error while sending the ClearBookState command");
                         continue;
                     }

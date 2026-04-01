@@ -12,7 +12,7 @@ use url::Url;
 pub enum OkxMdMsg {
     Instruments(Vec<Instrument>),
     Raw(RawMdMsg),
-    ClearBookState
+    ResetBookState
 }
 
 /* Connector/API configuration and subscription payloads */
@@ -56,6 +56,7 @@ pub struct SymbolParam {
 
 /* Book state and sync flow */
 
+#[derive(Default)]
 pub struct BookState {
     pub initialized: bool,
     pub prev_seq_id: Option<u64>,

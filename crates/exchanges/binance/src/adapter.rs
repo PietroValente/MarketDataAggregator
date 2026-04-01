@@ -1,6 +1,6 @@
 use std::{collections::HashMap, error::Error, mem, time::{SystemTime, UNIX_EPOCH}};
 
-use md_core::{book::BookLevels, events::{BookEventType, ControlEvent, EventEnvelope, NormalizedBookData, NormalizedEvent}, traits::adapter::ExchangeAdapter, types::{Exchange, ExchangeStatus, Instrument}};
+use md_core::{book::BookLevels, events::{BookEventType, ControlEvent, EventEnvelope, NormalizedBookData, NormalizedEvent}, helpers::adapter::{clear_book_state, compute_status, send_normalized_event, send_status}, traits::adapter::ExchangeAdapter, types::{Exchange, Instrument}};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tracing::{error, warn};
 
@@ -50,24 +50,6 @@ impl BinanceAdapter {
         self.live_books += 1;
     }
 
-    fn clear_book_state(&mut self) {
-        for (_, book) in &mut self.book_states {
-            book.status = BookSyncStatus::WaitingSnapshot;
-            book.last_applied_update_id = None;
-            book.symbols_pending_snapshot.clear();
-        }
-        self.live_books = 0;
-        
-        let status = ExchangeStatus::Initializing(0.0);
-        let event_envelope = EventEnvelope {
-            exchange: BinanceAdapter::exchange(),
-            event: NormalizedEvent::ApplyStatus(status)
-        };
-        if let Err(e) = self.normalized_tx.blocking_send(event_envelope) {
-            error!(exchange = ?BinanceAdapter::exchange(), component = ?BinanceAdapter::component(), error = ?e, "error while sending running status event");
-        }
-    }
-
     fn validate_snapshot(&mut self, payload: &ValidateSnapshot) -> Result<(), ValidateBookError> {
         let Some(book) = self.book_states.get_mut(&payload.symbol) else {
             return Err(ValidateBookError::InstrumentNotFound(payload.symbol.clone()));
@@ -110,20 +92,16 @@ impl BinanceAdapter {
     pub fn run(&mut self) {
         while let Some(msg) = self.raw_rx.blocking_recv() {
             match msg {
-                BinanceMdMsg::ClearBookState => {
-                    self.clear_book_state();
+                BinanceMdMsg::ResetBookState => {
+                    self.live_books = 0;
+                    clear_book_state(&mut self.book_states);
+                    send_status::<BinanceAdapter>(&self.normalized_tx, compute_status(self.live_books, self.book_states.len()));
                 },
                 BinanceMdMsg::Instruments(list) => {
                     for i in list.iter() {
                         self.book_states.insert(i.clone(), BookState::new());
                     }
-                    let event_envelope = EventEnvelope {
-                        exchange: BinanceAdapter::exchange(),
-                        event: NormalizedEvent::ApplyStatus(ExchangeStatus::Initializing(0.0))
-                    };
-                    if let Err(e) = self.normalized_tx.blocking_send(event_envelope) {
-                        error!(exchange = ?BinanceAdapter::exchange(), component = ?BinanceAdapter::component(), error = ?e, "error while sending running status event");
-                    }
+                    send_status::<BinanceAdapter>(&self.normalized_tx, compute_status(self.live_books, self.book_states.len()));
                 },
                 BinanceMdMsg::Snapshot(payload) => {
                     let Ok(parsed_snapshot) = serde_json::from_slice::<ParsedBookSnapshot>(&payload.payload) else {
@@ -148,30 +126,9 @@ impl BinanceAdapter {
                         instrument: payload.symbol.clone(),
                         levels: book_snapshot
                     });
-                    let event_envelope = EventEnvelope {
-                        exchange: BinanceAdapter::exchange(),
-                        event: snapshot_event
-                    };
-
-                    if let Err(e) = self.normalized_tx.blocking_send(event_envelope) {
-                        error!(exchange = ?BinanceAdapter::exchange(), component = ?BinanceAdapter::component(), error = ?e, "error while sending snapshot event");
-                    }
-
+                    send_normalized_event::<BinanceAdapter>(&self.normalized_tx, snapshot_event);
                     self.drain_buffered_updates(payload.symbol);
-                    let mut status = ExchangeStatus::Initializing(0.0);
-                    if !self.book_states.is_empty() {
-                        status = ExchangeStatus::Initializing(self.live_books as f32 / self.book_states.len() as f32);
-                    }
-                    if self.live_books == self.book_states.len() && !self.book_states.is_empty() {
-                        status = ExchangeStatus::Running;
-                    }
-                    let event_envelope = EventEnvelope {
-                        exchange: BinanceAdapter::exchange(),
-                        event: NormalizedEvent::ApplyStatus(status)
-                    };
-                    if let Err(e) = self.normalized_tx.blocking_send(event_envelope) {
-                        error!(exchange = ?BinanceAdapter::exchange(), component = ?BinanceAdapter::component(), error = ?e, "error while sending running status event");
-                    }
+                    send_status::<BinanceAdapter>(&self.normalized_tx, compute_status(self.live_books, self.book_states.len()));
                 },
                 BinanceMdMsg::WsMessage(payload) => {
                     match serde_json::from_slice::<WsMessage>(&payload) {
@@ -244,14 +201,7 @@ impl BinanceAdapter {
                                 instrument: update.symbol.clone(),
                                 levels: book_update
                             });
-                            let event_envelope = EventEnvelope {
-                                exchange: BinanceAdapter::exchange(),
-                                event: update_event
-                            };
-                            
-                            if let Err(e) = self.normalized_tx.blocking_send(event_envelope) {
-                                error!(exchange = ?BinanceAdapter::exchange(), component = ?BinanceAdapter::component(), error = ?e, "error while sending update event");
-                            }
+                            send_normalized_event::<BinanceAdapter>(&self.normalized_tx, update_event);
                         },
                     }
                 }

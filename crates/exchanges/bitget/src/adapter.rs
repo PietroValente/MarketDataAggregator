@@ -1,6 +1,6 @@
 use std::{collections::HashMap, error::Error, time::{SystemTime, UNIX_EPOCH}};
 
-use md_core::{book::BookLevels, events::{BookEventType, ControlEvent, EventEnvelope, NormalizedBookData, NormalizedEvent}, traits::adapter::ExchangeAdapter, types::{Exchange, ExchangeStatus, Instrument}};
+use md_core::{book::BookLevels, events::{BookEventType, ControlEvent, EventEnvelope, NormalizedBookData, NormalizedEvent}, helpers::adapter::{clear_book_state, compute_status, send_normalized_event, send_status}, traits::adapter::ExchangeAdapter, types::{Exchange, Instrument}};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tracing::{error, warn};
 
@@ -22,23 +22,6 @@ impl BitgetAdapter {
             control_tx,
             book_states: HashMap::new(),
             live_books: 0
-        }
-    }
-
-    fn clear_book_state(&mut self) {
-        for (_, book) in &mut self.book_states {
-            book.initialized = false;
-            book.last_seq = None;
-        }
-        self.live_books = 0;
-
-        let status = ExchangeStatus::Initializing(0.0);
-        let event_envelope = EventEnvelope {
-            exchange: BitgetAdapter::exchange(),
-            event: NormalizedEvent::ApplyStatus(status)
-        };
-        if let Err(e) = self.normalized_tx.blocking_send(event_envelope) {
-            error!(exchange = ?BitgetAdapter::exchange(), component = ?BitgetAdapter::component(), error = ?e, "error while sending running status event");
         }
     }
 
@@ -97,20 +80,16 @@ impl BitgetAdapter {
     pub fn run(&mut self) {
         while let Some(msg) = self.raw_rx.blocking_recv() {
             match msg {
-                BitgetMdMsg::ClearBookState => {
-                    self.clear_book_state();
+                BitgetMdMsg::ResetBookState => {
+                    self.live_books = 0;
+                    clear_book_state(&mut self.book_states);
+                    send_status::<BitgetAdapter>(&self.normalized_tx, compute_status(self.live_books, self.book_states.len()));
                 },
                 BitgetMdMsg::Instruments(symbols) => {
                     for i in symbols.iter() {
                         self.book_states.insert(i.clone(), BookState::new());
                     }
-                    let event_envelope = EventEnvelope {
-                        exchange: BitgetAdapter::exchange(),
-                        event: NormalizedEvent::ApplyStatus(ExchangeStatus::Initializing(0.0))
-                    };
-                    if let Err(e) = self.normalized_tx.blocking_send(event_envelope) {
-                        error!(exchange = ?BitgetAdapter::exchange(), component = ?BitgetAdapter::component(), error = ?e, "error while sending running status event");
-                    }
+                    send_status::<BitgetAdapter>(&self.normalized_tx, compute_status(self.live_books, self.book_states.len()));
                 },
                 BitgetMdMsg::Raw(msg) => {
                     match serde_json::from_slice::<WsMessage>(&msg) {
@@ -140,29 +119,9 @@ impl BitgetAdapter {
                                                 bids: data.bids
                                             }
                                         });
-                                        let event_envelope = EventEnvelope {
-                                            exchange: BitgetAdapter::exchange(),
-                                            event: snapshot_event
-                                        };
-                    
-                                        if let Err(e) = self.normalized_tx.blocking_send(event_envelope) {
-                                            error!(exchange = ?BitgetAdapter::exchange(), component = ?BitgetAdapter::component(), error = ?e, "error while sending snapshot event");
-                                        }
+                                        send_normalized_event::<BitgetAdapter>(&self.normalized_tx, snapshot_event);
                                     }
-                                    let mut status = ExchangeStatus::Initializing(0.0);
-                                    if !self.book_states.is_empty() {
-                                        status = ExchangeStatus::Initializing(self.live_books as f32 / self.book_states.len() as f32);
-                                    }
-                                    if self.live_books == self.book_states.len() && !self.book_states.is_empty() {
-                                        status = ExchangeStatus::Running;
-                                    }
-                                    let event_envelope = EventEnvelope {
-                                        exchange: BitgetAdapter::exchange(),
-                                        event: NormalizedEvent::ApplyStatus(status)
-                                    };
-                                    if let Err(e) = self.normalized_tx.blocking_send(event_envelope) {
-                                        error!(exchange = ?BitgetAdapter::exchange(), component = ?BitgetAdapter::component(), error = ?e, "error while sending running status event");
-                                    }
+                                    send_status::<BitgetAdapter>(&self.normalized_tx, compute_status(self.live_books, self.book_states.len()));
                                 },
                                 DepthBookAction::Update => {
                                     match self.validate_update(&depth) {
@@ -185,21 +144,14 @@ impl BitgetAdapter {
                                         Ok(()) => {}
                                     }
                                     for data in depth.data {
-                                        let snapshot_event = NormalizedEvent::Book(BookEventType::Update, NormalizedBookData {
+                                        let update_event = NormalizedEvent::Book(BookEventType::Update, NormalizedBookData {
                                             instrument: Instrument::from(inst_id.clone()),
                                             levels: BookLevels {
                                                 asks: data.asks,
                                                 bids: data.bids
                                             }
                                         });
-                                        let event_envelope = EventEnvelope {
-                                            exchange: BitgetAdapter::exchange(),
-                                            event: snapshot_event
-                                        };
-                    
-                                        if let Err(e) = self.normalized_tx.blocking_send(event_envelope) {
-                                            error!(exchange = ?BitgetAdapter::exchange(), component = ?BitgetAdapter::component(), error = ?e, "error while sending snapshot event");
-                                        }
+                                        send_normalized_event::<BitgetAdapter>(&self.normalized_tx, update_event);
                                     }
                                 }
                             }
