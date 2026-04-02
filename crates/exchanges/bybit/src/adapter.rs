@@ -1,6 +1,6 @@
 use std::{collections::HashMap, error::Error, time::{SystemTime, UNIX_EPOCH}};
 
-use md_core::{book::BookLevels, events::{BookEventType, ControlEvent, EventEnvelope, NormalizedBookData, NormalizedEvent}, helpers::adapter::{clear_book_state, compute_status, send_normalized_event, send_status}, traits::adapter::ExchangeAdapter, types::{Exchange, Instrument}};
+use md_core::{book::BookLevels, events::{BookEventType, ControlEvent, EngineMessage, NormalizedBookData, NormalizedEvent}, helpers::adapter::{clear_book_state, compute_status, send_normalized_event, send_status}, traits::adapter::ExchangeAdapter, types::{Exchange, Instrument}};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tracing::{error, warn};
 
@@ -8,14 +8,14 @@ use crate::types::{BookState, BybitMdMsg, DepthBookAction, ParsedBookMessage, Va
 
 pub struct BybitAdapter {
     raw_rx: Receiver<BybitMdMsg>,
-    normalized_tx: Sender<EventEnvelope>,
+    normalized_tx: Sender<EngineMessage>,
     control_tx: Sender<ControlEvent>,
     book_states: HashMap<Instrument, BookState>,
     live_books: usize
 }
 
 impl BybitAdapter {
-    pub fn new(raw_rx: Receiver<BybitMdMsg>, normalized_tx: Sender<EventEnvelope>, control_tx: Sender<ControlEvent>) -> Self {
+    pub fn new(raw_rx: Receiver<BybitMdMsg>, normalized_tx: Sender<EngineMessage>, control_tx: Sender<ControlEvent>) -> Self {
         Self {
             raw_rx,
             normalized_tx,
@@ -316,12 +316,14 @@ mod tests {
         assert!(matches!(control_rx.try_recv(), Ok(ControlEvent::Resync)));
 
         let mut saw_update = false;
-        while let Ok(event) = normalized_rx.try_recv() {
-            if let NormalizedEvent::Book(BookEventType::Update, book) = event.event {
+        while let Ok(msg) = normalized_rx.try_recv() {
+            if let EngineMessage::Apply(envelope) = msg {
+                if let NormalizedEvent::Book(BookEventType::Update, book) = envelope.event {
                 if book.instrument == instrument("BTCUSDT") {
                     saw_update = true;
                     break;
                 }
+            }
             }
         }
         assert!(saw_update, "delta currently emits update event even on validation error");
@@ -350,12 +352,14 @@ mod tests {
 
         let mut init_zero = 0usize;
         let mut init_half = 0usize;
-        while let Ok(event) = normalized_rx.try_recv() {
-            if let NormalizedEvent::ApplyStatus(status) = event.event {
-                match status {
-                    ExchangeStatus::Initializing(p) if (p - 0.0).abs() < f32::EPSILON => init_zero += 1,
-                    ExchangeStatus::Initializing(p) if (p - 0.5).abs() < f32::EPSILON => init_half += 1,
-                    _ => {}
+        while let Ok(msg) = normalized_rx.try_recv() {
+            if let EngineMessage::Apply(envelope) = msg {
+                if let NormalizedEvent::ApplyStatus(status) = envelope.event {
+                    match status {
+                        ExchangeStatus::Initializing(p) if (p - 0.0).abs() < f32::EPSILON => init_zero += 1,
+                        ExchangeStatus::Initializing(p) if (p - 0.5).abs() < f32::EPSILON => init_half += 1,
+                        _ => {}
+                    }
                 }
             }
         }

@@ -1,5 +1,6 @@
 use std::{cmp::Reverse, collections::BTreeMap, fmt::Display};
 use rust_decimal::Decimal;
+use rust_decimal_macros::dec;
 
 use crate::{helpers::book::{verify_checksum, ChecksumError}, types::{Price, Qty}};
 
@@ -48,92 +49,110 @@ pub struct BookLevels {
 
 pub struct LocalBook {
     update_id: u64,
-    ask: BTreeMap<Price, BookLevel>,
-    bid: BTreeMap<Reverse<Price>, BookLevel>
+    asks: BTreeMap<Price, BookLevel>,
+    bids: BTreeMap<Reverse<Price>, BookLevel>
 }
 
 impl LocalBook {
     pub fn new() -> Self {
         Self {
             update_id: 0,
-            ask: BTreeMap::new(),
-            bid: BTreeMap::new()
+            asks: BTreeMap::new(),
+            bids: BTreeMap::new()
         }
     }
 
     pub fn apply_snapshot(&mut self, snapshot: BookLevels) {
         self.clear();
         for (price, qty) in snapshot.asks {
-            self.upsert_ask(price, qty);
+            self.upsert_asks(price, qty);
         }
         for (price, qty) in snapshot.bids {
-            self.upsert_bid(price, qty);
+            self.upsert_bids(price, qty);
         }
     }
 
     pub fn apply_update(&mut self, update: BookLevels) {
         for (price, qty) in update.asks {
             if qty.is_zero() {
-                self.remove_ask(price);
+                self.remove_asks(price);
             } else {
-                self.upsert_ask(price, qty);
+                self.upsert_asks(price, qty);
             }
         }
         for (price, qty) in update.bids {
             if qty.is_zero() {
-                self.remove_bid(price);
+                self.remove_bids(price);
             } else {
-                self.upsert_bid(price, qty);
+                self.upsert_bids(price, qty);
             }
         }
     }
 
     pub fn verify_okx_bitget_checksum(&self, expected: i32) -> Result<(), ChecksumError> {
         verify_checksum(
-            self.top_n_bid(25),
-            self.top_n_ask(25),
+            self.top_n_bids(25),
+            self.top_n_asks(25),
             expected,
         )
     }
 
-    fn upsert_ask(&mut self, price: Price, qty: Qty) {
+    fn upsert_asks(&mut self, price: Price, qty: Qty) {
         let lvl = BookLevel::new(qty, price);
-        *self.ask.entry(price).or_insert(lvl) = lvl;
+        *self.asks.entry(price).or_insert(lvl) = lvl;
     }
 
-    fn upsert_bid(&mut self, price: Price, qty: Qty) {
+    fn upsert_bids(&mut self, price: Price, qty: Qty) {
         let lvl = BookLevel::new(qty, price);
-        *self.bid.entry(Reverse(price)).or_insert(lvl) = lvl;
+        *self.bids.entry(Reverse(price)).or_insert(lvl) = lvl;
     }
 
-    fn remove_ask(&mut self, price: Price) -> Option<BookLevel> {
-        self.ask.remove(&price)
+    fn remove_asks(&mut self, price: Price) -> Option<BookLevel> {
+        self.asks.remove(&price)
     }
 
-    fn remove_bid(&mut self, price: Price) -> Option<BookLevel> {
-        self.bid.remove(&Reverse(price))
+    fn remove_bids(&mut self, price: Price) -> Option<BookLevel> {
+        self.bids.remove(&Reverse(price))
     }
 
     fn clear(&mut self) {
-        self.ask.clear();
-        self.bid.clear();
+        self.asks.clear();
+        self.bids.clear();
         self.update_id = 0;
     }
 
-    pub fn top_n_ask(&self, n: usize) -> Vec<BookLevel> {
-        self.ask.values().take(n).copied().collect()
+    pub fn spread(&self) -> Option<Price> {
+        let ask = self.top_n_asks(1);
+        let bid = self.top_n_bids(1);
+        if ask.len() != 1 || bid.len() != 1 {
+            return None;
+        }
+        Some(ask[0].px - bid[0].px)
     }
 
-    pub fn top_n_bid(&self, n: usize) -> Vec<BookLevel> {
-        self.bid.values().take(n).copied().collect()
+    pub fn mid(&self) -> Option<Price> {
+        let ask = self.top_n_asks(1);
+        let bid = self.top_n_bids(1);
+        if ask.len() != 1 || bid.len() != 1 {
+            return None;
+        }
+        Some((ask[0].px + bid[0].px)/Price(dec!(2)))
     }
 
-    pub fn ask_len(&self) -> usize {
-        self.ask.len()
+    pub fn top_n_asks(&self, n: usize) -> Vec<BookLevel> {
+        self.asks.values().take(n).copied().collect()
     }
 
-    pub fn bid_len(&self) -> usize {
-        self.bid.len()
+    pub fn top_n_bids(&self, n: usize) -> Vec<BookLevel> {
+        self.bids.values().take(n).copied().collect()
+    }
+
+    pub fn asks_len(&self) -> usize {
+        self.asks.len()
+    }
+
+    pub fn bids_len(&self) -> usize {
+        self.bids.len()
     }
 }
 
@@ -159,18 +178,18 @@ mod tests {
             bids: vec![(price(10000), qty(3000)), (price(9900), qty(4000))],
         });
 
-        assert_eq!(book.ask_len(), 2);
-        assert_eq!(book.bid_len(), 2);
+        assert_eq!(book.asks_len(), 2);
+        assert_eq!(book.bids_len(), 2);
 
         book.apply_snapshot(BookLevels {
             asks: vec![(price(10300), qty(5000))],
             bids: vec![(price(9800), qty(6000))],
         });
 
-        assert_eq!(book.ask_len(), 1);
-        assert_eq!(book.bid_len(), 1);
-        assert_eq!(book.top_n_ask(10), vec![BookLevel::new(qty(5000), price(10300))]);
-        assert_eq!(book.top_n_bid(10), vec![BookLevel::new(qty(6000), price(9800))]);
+        assert_eq!(book.asks_len(), 1);
+        assert_eq!(book.bids_len(), 1);
+        assert_eq!(book.top_n_asks(10), vec![BookLevel::new(qty(5000), price(10300))]);
+        assert_eq!(book.top_n_bids(10), vec![BookLevel::new(qty(6000), price(9800))]);
     }
 
     #[test]
@@ -183,25 +202,25 @@ mod tests {
 
         book.apply_update(BookLevels {
             asks: vec![
-                (price(10000), qty(1200)), // replace existing ask
-                (price(10100), qty(1300)), // insert new ask
+                (price(10000), qty(1200)), // replace existing asks
+                (price(10100), qty(1300)), // insert new asks
             ],
             bids: vec![
-                (price(9900), qty(0)),     // remove existing bid
-                (price(9800), qty(1400)),  // insert new bid
+                (price(9900), qty(0)),     // remove existing bids
+                (price(9800), qty(1400)),  // insert new bids
             ],
         });
 
-        assert_eq!(book.ask_len(), 2);
-        assert_eq!(book.bid_len(), 1);
+        assert_eq!(book.asks_len(), 2);
+        assert_eq!(book.bids_len(), 1);
         assert_eq!(
-            book.top_n_ask(10),
+            book.top_n_asks(10),
             vec![
                 BookLevel::new(qty(1200), price(10000)),
                 BookLevel::new(qty(1300), price(10100)),
             ]
         );
-        assert_eq!(book.top_n_bid(10), vec![BookLevel::new(qty(1400), price(9800))]);
+        assert_eq!(book.top_n_bids(10), vec![BookLevel::new(qty(1400), price(9800))]);
     }
 
     #[test]
@@ -222,7 +241,7 @@ mod tests {
 
         // asks should be ascending by price
         assert_eq!(
-            book.top_n_ask(2),
+            book.top_n_asks(2),
             vec![
                 BookLevel::new(qty(2000), price(10200)),
                 BookLevel::new(qty(3000), price(10300)),
@@ -231,7 +250,7 @@ mod tests {
 
         // bids should be descending by price
         assert_eq!(
-            book.top_n_bid(2),
+            book.top_n_bids(2),
             vec![
                 BookLevel::new(qty(5000), price(10100)),
                 BookLevel::new(qty(6000), price(10000)),
@@ -239,8 +258,8 @@ mod tests {
         );
 
         // requesting more than available must return all levels
-        assert_eq!(book.top_n_ask(99).len(), 3);
-        assert_eq!(book.top_n_bid(99).len(), 3);
+        assert_eq!(book.top_n_asks(99).len(), 3);
+        assert_eq!(book.top_n_bids(99).len(), 3);
     }
 
     #[test]
@@ -266,11 +285,11 @@ mod tests {
         });
 
         assert_eq!(
-            book.top_n_ask(1),
+            book.top_n_asks(1),
             vec![BookLevel::new(qty(1300), price(10000))]
         );
         assert_eq!(
-            book.top_n_bid(1),
+            book.top_n_bids(1),
             vec![BookLevel::new(qty(1500), price(9900))]
         );
     }
@@ -290,11 +309,11 @@ mod tests {
         });
 
         assert_eq!(
-            book.top_n_ask(10),
+            book.top_n_asks(10),
             vec![BookLevel::new(qty(1000), price(10100))]
         );
         assert_eq!(
-            book.top_n_bid(10),
+            book.top_n_bids(10),
             vec![BookLevel::new(qty(2000), price(9900))]
         );
     }
@@ -305,8 +324,8 @@ mod tests {
 
         let mut rng = StdRng::seed_from_u64(0xA11CE_B00C);
         let mut book = LocalBook::new();
-        let mut ask_ref: BTreeMap<Price, Qty> = BTreeMap::new();
-        let mut bid_ref: BTreeMap<Price, Qty> = BTreeMap::new();
+        let mut asks_ref: BTreeMap<Price, Qty> = BTreeMap::new();
+        let mut bids_ref: BTreeMap<Price, Qty> = BTreeMap::new();
 
         // Start from a noisy snapshot with duplicate prices to stress last-write behavior.
         let mut asks = Vec::new();
@@ -315,25 +334,25 @@ mod tests {
             let p = price(rng.gen_range(10000..11000));
             let q = qty(rng.gen_range(1..1_000_000));
             asks.push((p, q));
-            ask_ref.insert(p, q);
+            asks_ref.insert(p, q);
         }
         for _ in 0..500 {
             let p = price(rng.gen_range(9000..10000));
             let q = qty(rng.gen_range(1..1_000_000));
             bids.push((p, q));
-            bid_ref.insert(p, q);
+            bids_ref.insert(p, q);
         }
 
         book.apply_snapshot(BookLevels { asks, bids });
 
         for _step in 0..10_000 {
-            let mut ask_updates = Vec::new();
-            let mut bid_updates = Vec::new();
+            let mut asks_updates = Vec::new();
+            let mut bids_updates = Vec::new();
 
-            let ask_batch = rng.gen_range(0..20);
-            let bid_batch = rng.gen_range(0..20);
+            let asks_batch = rng.gen_range(0..20);
+            let bids_batch = rng.gen_range(0..20);
 
-            for _ in 0..ask_batch {
+            for _ in 0..asks_batch {
                 let p = price(rng.gen_range(9500..11500));
                 let remove = rng.gen_bool(0.35);
                 let q = if remove {
@@ -341,15 +360,15 @@ mod tests {
                 } else {
                     qty(rng.gen_range(1..1_000_000))
                 };
-                ask_updates.push((p, q));
+                asks_updates.push((p, q));
                 if q.is_zero() {
-                    ask_ref.remove(&p);
+                    asks_ref.remove(&p);
                 } else {
-                    ask_ref.insert(p, q);
+                    asks_ref.insert(p, q);
                 }
             }
 
-            for _ in 0..bid_batch {
+            for _ in 0..bids_batch {
                 let p = price(rng.gen_range(8500..10500));
                 let remove = rng.gen_bool(0.35);
                 let q = if remove {
@@ -357,36 +376,36 @@ mod tests {
                 } else {
                     qty(rng.gen_range(1..1_000_000))
                 };
-                bid_updates.push((p, q));
+                bids_updates.push((p, q));
                 if q.is_zero() {
-                    bid_ref.remove(&p);
+                    bids_ref.remove(&p);
                 } else {
-                    bid_ref.insert(p, q);
+                    bids_ref.insert(p, q);
                 }
             }
 
             book.apply_update(BookLevels {
-                asks: ask_updates,
-                bids: bid_updates,
+                asks: asks_updates,
+                bids: bids_updates,
             });
 
-            assert_eq!(book.ask_len(), ask_ref.len());
-            assert_eq!(book.bid_len(), bid_ref.len());
+            assert_eq!(book.asks_len(), asks_ref.len());
+            assert_eq!(book.bids_len(), bids_ref.len());
 
-            let expected_asks: Vec<BookLevel> = ask_ref
+            let expected_asks: Vec<BookLevel> = asks_ref
                 .iter()
                 .take(25)
                 .map(|(p, q)| BookLevel::new(*q, *p))
                 .collect();
-            let expected_bids: Vec<BookLevel> = bid_ref
+            let expected_bids: Vec<BookLevel> = bids_ref
                 .iter()
                 .rev()
                 .take(25)
                 .map(|(p, q)| BookLevel::new(*q, *p))
                 .collect();
 
-            assert_eq!(book.top_n_ask(25), expected_asks);
-            assert_eq!(book.top_n_bid(25), expected_bids);
+            assert_eq!(book.top_n_asks(25), expected_asks);
+            assert_eq!(book.top_n_bids(25), expected_bids);
         }
     }
 }

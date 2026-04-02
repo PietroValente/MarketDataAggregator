@@ -1,6 +1,4 @@
-use tokio::sync::oneshot::Sender;
-
-use crate::{book::{BookLevel, BookLevels}, types::{Exchange, ExchangeStatus, Instrument, RawMdMsg}};
+use crate::{book::BookLevels, query::EngineQuery, types::{Exchange, ExchangeStatus, Instrument, RawMdMsg}};
 
 #[derive(Debug)]
 pub struct NormalizedBookData {
@@ -15,31 +13,21 @@ pub enum BookEventType {
     Update
 }
 
-#[derive(Debug)]
-pub struct NormalizedTop {
-    pub instrument: Instrument,
-    pub n: usize
-}
-
-#[derive(Debug)]
-pub enum NormalizedQuery {
-    TopAsk(Sender<Vec<BookLevel>>, NormalizedTop),
-    TopBid(Sender<Vec<BookLevel>>, NormalizedTop),
-    GetStatus(Sender<ExchangeStatus>)
-}
-
-#[derive(Debug)]
-pub enum NormalizedEvent {
-    Query(NormalizedQuery),
-    ApplyStatus(ExchangeStatus),
-    GetStatus,
-    Book(BookEventType, NormalizedBookData)
+pub enum EngineMessage {
+    Apply(EventEnvelope),
+    Query(EngineQuery),
 }
 
 #[derive(Debug)]
 pub struct EventEnvelope {
     pub exchange: Exchange,
     pub event: NormalizedEvent
+}
+
+#[derive(Debug)]
+pub enum NormalizedEvent {
+    ApplyStatus(ExchangeStatus),
+    Book(BookEventType, NormalizedBookData),
 }
 
 pub enum ControlEvent {

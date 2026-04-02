@@ -1,15 +1,15 @@
 use std::{io::{self, Write}, time::{Duration, Instant}};
 
 use crossterm::{cursor::MoveTo, event::{self, Event, KeyCode, KeyEventKind}, execute, terminal::{disable_raw_mode, enable_raw_mode, Clear, ClearType}};
-use md_core::{events::{EventEnvelope, NormalizedEvent, NormalizedQuery, NormalizedTop}, types::{Exchange, Instrument}};
+use md_core::{events::EngineMessage, query::EngineQuery, types::{Exchange, Instrument}};
 use tokio::sync::{mpsc::Sender, oneshot};
 
 pub struct QueryManager {
-    normalized_tx: Sender<EventEnvelope>,
+    normalized_tx: Sender<EngineMessage>,
 }
 
 impl QueryManager {
-    pub fn new(normalized_tx: Sender<EventEnvelope>) -> Self {
+    pub fn new(normalized_tx: Sender<EngineMessage>) -> Self {
         Self { normalized_tx }
     }
 
@@ -68,10 +68,11 @@ impl QueryManager {
 
                     let (status_tx, status_rx) = oneshot::channel();
 
-                    let status_event = EventEnvelope {
+                    let status_event = EngineMessage::Query(EngineQuery::ExchangeStatus {
                         exchange,
-                        event: NormalizedEvent::Query(NormalizedQuery::GetStatus(status_tx)),
-                    };
+                        reply_to: status_tx
+                    });
+
                     if let Err(e) = self.normalized_tx.blocking_send(status_event) {
                         eprintln!("Error while sending the status request: {}", e);
                         continue;
@@ -79,7 +80,14 @@ impl QueryManager {
 
                     match status_rx.blocking_recv() {
                         Ok(msg) => {
-                            println!("{} status: {}", exchange, msg);
+                            match msg {
+                                Ok(status) => {
+                                    println!("{} status: {}", exchange, status);
+                                },
+                                Err(e) => {
+                                    println!("error: {}", e);
+                                }
+                            }
                         },
                         Err(e) => {
                             eprintln!("Error while receiving the status data: {}", e);
@@ -97,7 +105,7 @@ impl QueryManager {
         }
     }
 
-    fn run_top_mode(&self, exchange: Exchange, instrument: String, n: usize) {
+    fn run_top_mode(&self, exchange: Exchange, instrument: String, depth: usize) {
         if let Err(e) = enable_raw_mode() {
             eprintln!("Error enabling raw mode: {}", e);
             return;
@@ -135,61 +143,44 @@ impl QueryManager {
                     continue;
                 }
 
-                let (asks_tx, asks_rx) = oneshot::channel();
-                let (bids_tx, bids_rx) = oneshot::channel();
+                let (book_tx, book_rx) = oneshot::channel();
 
-                let asks_event = EventEnvelope {
-                    exchange,
-                    event: NormalizedEvent::Query(NormalizedQuery::TopAsk(asks_tx, NormalizedTop {
-                        instrument: Instrument::from(instrument.clone()),
-                        n
-                    })),
-                };
+                let book = EngineMessage::Query(EngineQuery::Book { 
+                    exchange, 
+                    instrument: Instrument::from(instrument.clone()), 
+                    depth, 
+                    reply_to: book_tx
+                });
 
-                let bids_event = EventEnvelope {
-                    exchange,
-                    event: NormalizedEvent::Query(NormalizedQuery::TopBid(bids_tx, NormalizedTop {
-                        instrument: Instrument::from(instrument.clone()),
-                        n
-                    })),
-                };
-
-                if let Err(e) = self.normalized_tx.blocking_send(asks_event) {
-                    last_status = Some(format!("Error while sending the asks request: {}", e));
+                if let Err(e) = self.normalized_tx.blocking_send(book) {
+                    last_status = Some(format!("Error while sending the book request: {}", e));
                     self.render_top_mode(&instrument, &last_asks, &last_bids, last_status.as_deref());
                     last_refresh = Instant::now();
                     continue;
                 }
 
-                if let Err(e) = self.normalized_tx.blocking_send(bids_event) {
-                    last_status = Some(format!("Error while sending the bids request: {}", e));
-                    self.render_top_mode(&instrument, &last_asks, &last_bids, last_status.as_deref());
-                    last_refresh = Instant::now();
-                    continue;
-                }
-
-                let asks = match asks_rx.blocking_recv() {
-                    Ok(msg) => msg,
+                let book = match book_rx.blocking_recv() {
+                    Ok(msg) => {
+                        match msg {
+                            Err(e) => {
+                                last_status = Some(format!("Error while receiving the book data: {}", e));
+                                self.render_top_mode(&instrument, &last_asks, &last_bids, last_status.as_deref());
+                                last_refresh = Instant::now();
+                                continue;
+                            }
+                            Ok(msg) => msg
+                        }
+                    },
                     Err(e) => {
-                        last_status = Some(format!("Error while receiving the asks data: {}", e));
+                        last_status = Some(format!("Error while receiving the book data: {}", e));
                         self.render_top_mode(&instrument, &last_asks, &last_bids, last_status.as_deref());
                         last_refresh = Instant::now();
                         continue;
                     }
                 };
 
-                let bids = match bids_rx.blocking_recv() {
-                    Ok(msg) => msg,
-                    Err(e) => {
-                        last_status = Some(format!("Error while receiving the bids data: {}", e));
-                        self.render_top_mode(&instrument, &last_asks, &last_bids, last_status.as_deref());
-                        last_refresh = Instant::now();
-                        continue;
-                    }
-                };
-
-                last_asks = asks.into_iter().map(|x| x.to_string()).collect();
-                last_bids = bids.into_iter().map(|x| x.to_string()).collect();
+                last_asks = book.asks.into_iter().map(|x| x.to_string()).collect();
+                last_bids = book.bids.into_iter().map(|x| x.to_string()).collect();
 
                 if last_asks.is_empty() || last_bids.is_empty() {
                     last_status = Some("Instrument not found".to_string());

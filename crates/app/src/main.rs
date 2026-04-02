@@ -12,7 +12,7 @@ use coinbase::{adapter::CoinbaseAdapter, connector::CoinbaseConnector, types::{C
 use okx::{adapter::OkxAdapter, connector::OkxConnector, types::{OkxMdMsg, OkxUrls}};
 
 use engine::Engine;
-use md_core::{events::{ControlEvent, EventEnvelope}, logging::{layer::DbLoggingLayer, writer::DbLoggingWriter}, traits::connector::ExchangeConnector, types::Exchange};
+use md_core::{events::{ControlEvent, EngineMessage}, logging::{layer::DbLoggingLayer, writer::DbLoggingWriter}, traits::connector::ExchangeConnector, types::Exchange};
 use query::query_manager::QueryManager;
 
 mod config;
@@ -62,7 +62,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         (Exchange::Coinbase, coinbase_control_tx.clone()),
         (Exchange::Okx, okx_control_tx.clone())
     ]);
-    let (normalized_tx, normalized_rx) = channel::<EventEnvelope>(config.channels.normalized_buffer);
+    let (normalized_tx, normalized_rx) = channel::<EngineMessage>(config.channels.normalized_buffer);
     let mut engine = Engine::new(normalized_rx, exchanges);
     thread::spawn(move || {
         engine.run();

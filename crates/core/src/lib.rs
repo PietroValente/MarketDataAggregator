@@ -5,3 +5,4 @@ pub mod traits;
 pub mod logging;
 pub mod helpers;
 pub mod connector;
+pub mod query;

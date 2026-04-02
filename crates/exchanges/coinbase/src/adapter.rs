@@ -1,7 +1,7 @@
 use std::{collections::HashMap, error::Error, time::{SystemTime, UNIX_EPOCH}};
 
 use chrono::DateTime;
-use md_core::{book::BookLevels, events::{BookEventType, ControlEvent, EventEnvelope, NormalizedBookData, NormalizedEvent}, helpers::adapter::{clear_book_state, compute_status, send_normalized_event, send_status}, traits::adapter::ExchangeAdapter, types::{Exchange, Instrument}};
+use md_core::{book::BookLevels, events::{BookEventType, ControlEvent, EngineMessage, NormalizedBookData, NormalizedEvent}, helpers::adapter::{clear_book_state, compute_status, send_normalized_event, send_status}, traits::adapter::ExchangeAdapter, types::{Exchange, Instrument}};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tracing::{error, warn};
 
@@ -9,14 +9,14 @@ use crate::types::{BookState, CoinbaseMdMsg, ParsedBookSnapshot, ParsedBookUpdat
 
 pub struct CoinbaseAdapter {
     raw_rx: Receiver<CoinbaseMdMsg>,
-    normalized_tx: Sender<EventEnvelope>,
+    normalized_tx: Sender<EngineMessage>,
     control_tx: Sender<ControlEvent>,
     book_states: HashMap<Instrument, BookState>,
     live_books: usize
 }
 
 impl CoinbaseAdapter {
-    pub fn new(raw_rx: Receiver<CoinbaseMdMsg>, normalized_tx: Sender<EventEnvelope>, control_tx: Sender<ControlEvent>) -> Self {
+    pub fn new(raw_rx: Receiver<CoinbaseMdMsg>, normalized_tx: Sender<EngineMessage>, control_tx: Sender<ControlEvent>) -> Self {
         Self {
             raw_rx,
             normalized_tx,

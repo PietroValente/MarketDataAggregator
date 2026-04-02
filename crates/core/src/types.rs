@@ -1,9 +1,33 @@
-use std::{fmt, ops::{Deref, DerefMut}};
+use std::{fmt, ops::{Add, Deref, DerefMut, Div, Sub}};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Price(pub Decimal);
+
+impl Add for Price {
+    type Output = Price;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        Price(self.0 + rhs.0)
+    }
+}
+
+impl Sub for Price {
+    type Output = Price;
+
+    fn sub(self, rhs: Self) -> Self::Output {
+        Price(self.0 - rhs.0)
+    }
+}
+
+impl Div for Price {
+    type Output = Price;
+
+    fn div(self, rhs: Self) -> Self::Output {
+        Price(self.0 / rhs.0)
+    }
+}
 
 impl fmt::Display for Price {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
