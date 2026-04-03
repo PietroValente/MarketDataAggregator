@@ -20,6 +20,7 @@ use config::load_config;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    println!("\x1B[2J\x1B[1;1H");
     let config = load_config("config/config.toml").expect("Load config error");
 
     /* LOGS */

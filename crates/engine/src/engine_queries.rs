@@ -89,6 +89,36 @@ impl Engine {
                     );
                 }
             }
+            EngineQuery::SearchContains { query, limit, reply_to } => {
+                let result = self.query_search_contains(&query, limit);
+
+                if reply_to.send(result).is_err() {
+                    error!(
+                        component = ?Component::Engine,
+                        "error sending SearchContains response"
+                    );
+                }
+            }
+            EngineQuery::SearchSuffix { query, limit, reply_to } => {
+                let result = self.query_search_suffix(&query, limit);
+
+                if reply_to.send(result).is_err() {
+                    error!(
+                        component = ?Component::Engine,
+                        "error sending SearchSuffix response"
+                    );
+                }
+            }
+            EngineQuery::SearchGlob { query, limit, reply_to } => {
+                let result = self.query_search_glob(&query, limit);
+
+                if reply_to.send(result).is_err() {
+                    error!(
+                        component = ?Component::Engine,
+                        "error sending SearchGlob response"
+                    );
+                }
+            }
 
             EngineQuery::AllStatuses { reply_to } => {
                 let result = self.query_all_statuses();
@@ -262,7 +292,7 @@ impl Engine {
 
     fn query_search(&self, query: &String) -> BTreeMap<Instrument, Vec<Exchange>> {
         let mut result: BTreeMap<Instrument, Vec<Exchange>> = BTreeMap::new();
-    
+
         for (&exchange, exchange_state) in &self.exchanges {
             for instrument in exchange_state.instruments_iter() {
                 if instrument.starts_with(query) {
@@ -273,8 +303,89 @@ impl Engine {
                 }
             }
         }
-    
+
         result
+    }
+
+    fn query_search_contains(&self, query: &str, limit: usize) -> BTreeMap<Instrument, Vec<Exchange>> {
+        self.query_search_with_limit(limit, |instrument| instrument.contains(query))
+    }
+
+    fn query_search_suffix(&self, query: &str, limit: usize) -> BTreeMap<Instrument, Vec<Exchange>> {
+        self.query_search_with_limit(limit, |instrument| instrument.ends_with(query))
+    }
+
+    fn query_search_glob(&self, query: &str, limit: usize) -> BTreeMap<Instrument, Vec<Exchange>> {
+        self.query_search_with_limit(limit, |instrument| Self::glob_match_star(instrument, query))
+    }
+
+    fn query_search_with_limit<F>(&self, limit: usize, mut predicate: F) -> BTreeMap<Instrument, Vec<Exchange>>
+    where
+        F: FnMut(&str) -> bool,
+    {
+        let mut result: BTreeMap<Instrument, Vec<Exchange>> = BTreeMap::new();
+        if limit == 0 {
+            return result;
+        }
+
+        for (&exchange, exchange_state) in &self.exchanges {
+            for instrument in exchange_state.instruments_iter() {
+                if !predicate(instrument) {
+                    continue;
+                }
+
+                let is_new = !result.contains_key(instrument);
+                if is_new && result.len() >= limit {
+                    continue;
+                }
+
+                result.entry(instrument.clone()).or_default().push(exchange);
+            }
+        }
+
+        result
+    }
+
+    fn glob_match_star(text: &str, pattern: &str) -> bool {
+        if pattern == "*" {
+            return true;
+        }
+
+        let starts_star = pattern.starts_with('*');
+        let ends_star = pattern.ends_with('*');
+        let parts: Vec<&str> = pattern.split('*').filter(|p| !p.is_empty()).collect();
+        if parts.is_empty() {
+            return true;
+        }
+
+        let mut idx = 0usize;
+        if !starts_star {
+            if !text.starts_with(parts[0]) {
+                return false;
+            }
+            idx = parts[0].len();
+        }
+
+        let last = parts.len() - 1;
+        for (pi, part) in parts.iter().enumerate() {
+            if !starts_star && pi == 0 {
+                continue;
+            }
+            if !ends_star && pi == last {
+                break;
+            }
+            if let Some(pos) = text[idx..].find(part) {
+                idx += pos + part.len();
+            } else {
+                return false;
+            }
+        }
+
+        if !ends_star {
+            text.ends_with(parts[last])
+        } else {
+            true
+        }
     }
 
     fn query_all_statuses(&self) -> Vec<ExchangeStatusView> {

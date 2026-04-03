@@ -37,6 +37,21 @@ pub enum EngineQuery {
         query: String,
         reply_to: oneshot::Sender<BTreeMap<Instrument, Vec<Exchange>>>,
     },
+    SearchContains {
+        query: String,
+        limit: usize,
+        reply_to: oneshot::Sender<BTreeMap<Instrument, Vec<Exchange>>>,
+    },
+    SearchSuffix {
+        query: String,
+        limit: usize,
+        reply_to: oneshot::Sender<BTreeMap<Instrument, Vec<Exchange>>>,
+    },
+    SearchGlob {
+        query: String,
+        limit: usize,
+        reply_to: oneshot::Sender<BTreeMap<Instrument, Vec<Exchange>>>,
+    },
     AllStatuses {
         reply_to: oneshot::Sender<Vec<ExchangeStatusView>>,
     },
