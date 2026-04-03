@@ -178,7 +178,7 @@ impl Display for BookLevel {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct BookLevels {
     pub bids: Vec<(Price, Qty)>,
     pub asks: Vec<(Price, Qty)>,
@@ -296,6 +296,7 @@ impl LocalBook {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::helpers::book::compute_checksum;
     use rust_decimal::Decimal;
     use std::collections::BTreeMap;
 
@@ -432,6 +433,29 @@ mod tests {
     }
 
     #[test]
+    fn okx_bitget_checksum_matches_compute_checksum_for_top_25() {
+        let mut book = LocalBook::new();
+        book.apply_snapshot(BookLevels {
+            asks: vec![
+                (price(10200), qty(2000)),
+                (price(10300), qty(3000)),
+            ],
+            bids: vec![
+                (price(10100), qty(5000)),
+                (price(10000), qty(6000)),
+            ],
+        });
+
+        let expected = compute_checksum(book.top_n_bids(25), book.top_n_asks(25));
+        book.verify_okx_bitget_checksum(expected).unwrap();
+
+        assert!(
+            book.verify_okx_bitget_checksum(expected + 1).is_err(),
+            "wrong checksum must fail"
+        );
+    }
+
+    #[test]
     fn removing_nonexistent_levels_is_noop() {
         let mut book = LocalBook::new();
         book.apply_snapshot(BookLevels {
@@ -543,6 +567,9 @@ mod tests {
 
             assert_eq!(book.top_n_asks(25), expected_asks);
             assert_eq!(book.top_n_bids(25), expected_bids);
+
+            let expected_cs = compute_checksum(book.top_n_bids(25), book.top_n_asks(25));
+            book.verify_okx_bitget_checksum(expected_cs).unwrap();
         }
     }
 }
