@@ -1,9 +1,8 @@
-use std::{collections::{BTreeMap, BTreeSet}, error::Error, fmt::Display};
+use std::{collections::{BTreeMap, BTreeSet}, error::Error};
 
-use rust_decimal::Decimal;
 use tokio::sync::oneshot;
 
-use crate::{book::BookLevel, types::{Exchange, ExchangeStatus, Instrument, Price, Qty}};
+use crate::{book::BookLevel, types::{Exchange, ExchangeStatus, Instrument, Price}};
 
 pub enum EngineQuery {
     ExchangeStatus {
@@ -93,25 +92,8 @@ pub struct SpreadView {
 
 pub struct AggregatedDepthView {
     pub instrument: Instrument,
-    pub asks: Vec<AggregatedDepthLevel>,
-    pub bids: Vec<AggregatedDepthLevel>,
-}
-
-pub struct AggregatedDepthLevel {
-    pub price: Price,
-    pub total_qty: Qty,
-}
-
-impl Display for AggregatedDepthLevel {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        fn fmt_decimal(mut x: Decimal, scale: u32) -> String {
-            x.rescale(scale);
-            x.to_string()
-        }
-
-        let px = fmt_decimal(self.price.0, 2);
-        let qty = fmt_decimal(self.total_qty.0, 5);
-
-        write!(f, "{:>12}   {:>12}", px, qty)
-    }
+    pub asks: BTreeSet<BookLevel>,
+    pub bids: BTreeSet<BookLevel>,
+    pub spread: Option<Price>,
+    pub mid: Option<Price>,
 }

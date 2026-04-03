@@ -2,6 +2,7 @@ use std::{cmp::max, io::{self, Write}, time::{Duration, Instant}};
 
 use crossterm::{cursor::MoveTo, event::{self, Event, KeyCode, KeyEventKind}, execute, terminal::{disable_raw_mode, enable_raw_mode, Clear, ClearType}};
 use md_core::{events::EngineMessage, query::{AggregatedDepthView, BestLevelPerExchange, BookView, EngineQuery, ExchangeStatusView, SpreadView}, types::{Exchange, Instrument}};
+use rust_decimal::{Decimal, prelude::ToPrimitive};
 use tokio::sync::{mpsc::Sender, oneshot};
 
 pub struct QueryManager {
@@ -9,6 +10,9 @@ pub struct QueryManager {
 }
 
 impl QueryManager {
+    const PRICE_COL_WIDTH: usize = 16;
+    const QTY_COL_WIDTH: usize = 12;
+
     pub fn new(normalized_tx: Sender<EngineMessage>) -> Self {
         Self { normalized_tx }
     }
@@ -237,20 +241,70 @@ impl QueryManager {
         ];
 
         let cmd_w = rows.iter().map(|(cmd, _)| cmd.len()).max().unwrap_or(0);
-        println!("Commands:");
+        println!("\nCommands:");
         for (cmd, desc) in rows {
             println!("  {:cmd_w$}  {}", cmd, desc, cmd_w = cmd_w);
         }
         println!();
     }
 
-    fn fmt_with_2_decimals(v: impl ToString) -> String {
-        let s = v.to_string();
-        let Some(dot_idx) = s.find('.') else {
-            return s;
+    fn adaptive_price_scale(v: Decimal) -> u32 {
+        let s = v.normalize().to_string();
+        let abs = s.strip_prefix('-').unwrap_or(&s);
+
+        let Some(dot_idx) = abs.find('.') else {
+            return 2;
         };
-        let keep = (dot_idx + 1 + 2).min(s.len());
-        s[..keep].to_string()
+
+        let int_part = &abs[..dot_idx];
+        let frac_part = &abs[dot_idx + 1..];
+
+        if int_part != "0" {
+            2
+        } else {
+            let leading_zeros = frac_part.chars().take_while(|c| *c == '0').count();
+            ((leading_zeros + 3) as u32).clamp(2, 10)
+        }
+    }
+
+    fn fmt_decimal_fixed(mut x: Decimal, scale: u32) -> String {
+        x.rescale(scale);
+        x.to_string()
+    }
+
+    fn fmt_price_adaptive(px: Decimal) -> String {
+        Self::fmt_decimal_fixed(px, Self::adaptive_price_scale(px))
+    }
+
+    fn fmt_qty_human(qty: Decimal) -> String {
+        let Some(val) = qty.to_f64() else {
+            return qty.normalize().to_string();
+        };
+        let abs = val.abs();
+
+        if abs >= 1_000_000_000.0 {
+            format!("{:.2}B", val / 1_000_000_000.0)
+        } else if abs >= 1_000_000.0 {
+            format!("{:.2}M", val / 1_000_000.0)
+        } else if abs >= 1_000.0 {
+            format!("{:.2}K", val / 1_000.0)
+        } else if abs >= 1.0 {
+            format!("{:.5}", val)
+        } else {
+            format!("{:.8}", val)
+        }
+    }
+
+    fn fmt_level_row(px: Decimal, qty: Decimal) -> String {
+        let px = Self::fmt_price_adaptive(px);
+        let qty = Self::fmt_qty_human(qty);
+        format!(
+            "{:>price_width$}   {:>qty_width$}",
+            px,
+            qty,
+            price_width = Self::PRICE_COL_WIDTH,
+            qty_width = Self::QTY_COL_WIDTH
+        )
     }
 
     fn run_live_mode<T, Req, Render>(&self, mut request: Req, mut render: Render) -> Result<(), String>
@@ -625,36 +679,42 @@ impl QueryManager {
             .asks
             .iter()
             .chain(view.bids.iter())
-            .map(|l| l.to_string().len())
+            .map(|l| Self::fmt_level_row(l.px().0, l.qty().0).len())
             .max()
-            .unwrap_or(27);
+            .unwrap_or(Self::PRICE_COL_WIDTH + Self::QTY_COL_WIDTH + 3);
 
         println!();
         let spread_text = view
             .spread
             .as_ref()
-            .map(|p| Self::fmt_with_2_decimals(p))
+            .map(|p| Self::fmt_price_adaptive(p.0))
             .unwrap_or_else(|| "-".to_string());
         println!("Spread: {}", spread_text);
         println!("{}", "-".repeat(level_w + 10));
 
         println!("ASKS");
         for ask in view.asks.iter().rev() {
-            println!("  {}", ask);
+            println!("  {}", Self::fmt_level_row(ask.px().0, ask.qty().0));
         }
 
         println!("{}", "-".repeat(level_w + 10));
         let mid_text = view
             .mid
             .as_ref()
-            .map(|p| Self::fmt_with_2_decimals(p))
+            .map(|p| Self::fmt_price_adaptive(p.0))
             .unwrap_or_else(|| "-".to_string());
-        println!("MID:  {:>8}", mid_text);
+        println!(
+            "  {:>price_width$}   {:>qty_width$}",
+            mid_text,
+            "MID",
+            price_width = Self::PRICE_COL_WIDTH,
+            qty_width = Self::QTY_COL_WIDTH
+        );
         println!("{}", "-".repeat(level_w + 10));
 
         println!("BIDS");
         for bid in &view.bids {
-            println!("  {}", bid);
+            println!("  {}", Self::fmt_level_row(bid.px().0, bid.qty().0));
         }
     }
 
@@ -691,10 +751,14 @@ impl QueryManager {
             levels
                 .iter()
                 .flat_map(|l| [l.best_bid.as_ref(), l.best_ask.as_ref()])
-                .map(|opt| opt.map(|x| x.to_string().len()).unwrap_or(1))
+                .map(|opt| {
+                    opt.map(|x| Self::fmt_level_row(x.px().0, x.qty().0).len())
+                        .unwrap_or(1)
+                })
                 .max()
                 .unwrap_or(1),
         );
+        let cell_w = max(cell_w, Self::PRICE_COL_WIDTH + 3 + Self::QTY_COL_WIDTH);
 
         let sep = format!(
             "+-{}-+-{}-+-{}-+-{}-+",
@@ -707,7 +771,7 @@ impl QueryManager {
         println!();
         println!("{sep}");
         println!(
-            "| {:exchange_w$} | {:status_w$} | {:cell_w$} | {:cell_w$} |",
+            "| {:exchange_w$} | {:status_w$} | {:>cell_w$} | {:>cell_w$} |",
             "EXCHANGE",
             "STATUS",
             "BEST_BID",
@@ -724,16 +788,16 @@ impl QueryManager {
             let best_bid = lvl
                 .best_bid
                 .as_ref()
-                .map(|l| l.to_string())
+                .map(|l| Self::fmt_level_row(l.px().0, l.qty().0))
                 .unwrap_or_else(|| "-".to_string());
             let best_ask = lvl
                 .best_ask
                 .as_ref()
-                .map(|l| l.to_string())
+                .map(|l| Self::fmt_level_row(l.px().0, l.qty().0))
                 .unwrap_or_else(|| "-".to_string());
 
             println!(
-                "| {:exchange_w$} | {:status_w$} | {:cell_w$} | {:cell_w$} |",
+                "| {:exchange_w$} | {:status_w$} | {:>cell_w$} | {:>cell_w$} |",
                 exchange,
                 ex_status,
                 best_bid,
@@ -758,31 +822,172 @@ impl QueryManager {
             None => println!("Waiting for data..."),
             Some(None) => println!("No exchange has the instrument (yet)."),
             Some(Some(view)) => {
-                let rows = vec![
-                    ("Instrument".to_string(), view.instrument.to_string()),
-                    ("Best ask exchange".to_string(), view.best_ask_exchange.to_string()),
-                    ("Best bid exchange".to_string(), view.best_bid_exchange.to_string()),
-                    ("Best ask".to_string(), view.best_ask.to_string()),
-                    ("Best bid".to_string(), view.best_bid.to_string()),
-                    ("Absolute spread".to_string(), Self::fmt_with_2_decimals(view.absolute_spread)),
-                    ("Relative spread (bps)".to_string(), format!("{:.2}", view.relative_spread_bps)),
+                let instrument = view.instrument.to_string();
+                let best_ask_exchange = view.best_ask_exchange.to_string();
+                let best_bid_exchange = view.best_bid_exchange.to_string();
+                let ask_px = Self::fmt_price_adaptive(view.best_ask.px().0);
+                let ask_qty = Self::fmt_qty_human(view.best_ask.qty().0);
+                let bid_px = Self::fmt_price_adaptive(view.best_bid.px().0);
+                let bid_qty = Self::fmt_qty_human(view.best_bid.qty().0);
+                let abs_spread = Self::fmt_price_adaptive(view.absolute_spread.0);
+                let rel_spread = format!("{:.2}", view.relative_spread_bps);
+
+                let info_rows = [
+                    "Instrument".to_string(),
+                    "Best ask exchange".to_string(),
+                    "Best bid exchange".to_string(),
+                    "Absolute spread".to_string(),
+                    "Relative spread (bps)".to_string(),
+                    "Best ask".to_string(),
+                    "Best bid".to_string(),
                 ];
-                let key_w = rows.iter().map(|(k, _)| k.len()).max().unwrap_or(10);
-                let val_w = rows.iter().map(|(_, v)| v.len()).max().unwrap_or(10);
+                let info_w = info_rows
+                    .iter()
+                    .map(|s| s.len())
+                    .max()
+                    .unwrap_or(22)
+                    .max("INFO".len());
+                let val_w = [
+                    "VALUE".len(),
+                    instrument.len(),
+                    best_ask_exchange.len(),
+                    best_bid_exchange.len(),
+                    abs_spread.len(),
+                    rel_spread.len(),
+                ]
+                .into_iter()
+                .max()
+                .unwrap_or(12)
+                .max(12);
+
+                let px_w = [
+                    "PRICE".len(),
+                    ask_px.len(),
+                    bid_px.len(),
+                    abs_spread.len(),
+                    rel_spread.len(),
+                    instrument.len(),
+                    best_ask_exchange.len(),
+                    best_bid_exchange.len(),
+                ]
+                .into_iter()
+                .max()
+                .unwrap_or(Self::PRICE_COL_WIDTH)
+                .max(Self::PRICE_COL_WIDTH);
+
+                let qty_w = ["QTY".len(), ask_qty.len(), bid_qty.len()]
+                    .into_iter()
+                    .max()
+                    .unwrap_or(Self::QTY_COL_WIDTH)
+                    .max(Self::QTY_COL_WIDTH);
+
+                let sep = format!(
+                    "+-{}-+-{}-+-{}-+-{}-+",
+                    "-".repeat(info_w),
+                    "-".repeat(val_w),
+                    "-".repeat(px_w),
+                    "-".repeat(qty_w)
+                );
 
                 println!();
-                println!("{:key_w$} | {:val_w$}", "METRIC", "VALUE", key_w = key_w, val_w = val_w);
-                println!("{}", "-".repeat(key_w + val_w + 3));
-                for (k, v) in rows {
-                    println!("{:key_w$} | {:val_w$}", k, v, key_w = key_w, val_w = val_w);
-                }
+                println!("{sep}");
+                println!(
+                    "| {:info_w$} | {:val_w$} | {:>px_w$} | {:>qty_w$} |",
+                    "INFO",
+                    "VALUE",
+                    "PRICE",
+                    "QTY",
+                    info_w = info_w,
+                    val_w = val_w,
+                    px_w = px_w,
+                    qty_w = qty_w
+                );
+                println!("{sep}");
+                println!(
+                    "| {:info_w$} | {:val_w$} | {:>px_w$} | {:>qty_w$} |",
+                    "Instrument",
+                    instrument,
+                    "-",
+                    "-",
+                    info_w = info_w,
+                    val_w = val_w,
+                    px_w = px_w,
+                    qty_w = qty_w
+                );
+                println!(
+                    "| {:info_w$} | {:val_w$} | {:>px_w$} | {:>qty_w$} |",
+                    "Best ask exchange",
+                    best_ask_exchange,
+                    "-",
+                    "-",
+                    info_w = info_w,
+                    val_w = val_w,
+                    px_w = px_w,
+                    qty_w = qty_w
+                );
+                println!(
+                    "| {:info_w$} | {:val_w$} | {:>px_w$} | {:>qty_w$} |",
+                    "Best bid exchange",
+                    best_bid_exchange,
+                    "-",
+                    "-",
+                    info_w = info_w,
+                    val_w = val_w,
+                    px_w = px_w,
+                    qty_w = qty_w
+                );
+                println!(
+                    "| {:info_w$} | {:val_w$} | {:>px_w$} | {:>qty_w$} |",
+                    "Absolute spread",
+                    abs_spread,
+                    "-",
+                    "-",
+                    info_w = info_w,
+                    val_w = val_w,
+                    px_w = px_w,
+                    qty_w = qty_w
+                );
+                println!(
+                    "| {:info_w$} | {:val_w$} | {:>px_w$} | {:>qty_w$} |",
+                    "Relative spread (bps)",
+                    rel_spread,
+                    "-",
+                    "-",
+                    info_w = info_w,
+                    val_w = val_w,
+                    px_w = px_w,
+                    qty_w = qty_w
+                );
+                println!(
+                    "| {:info_w$} | {:val_w$} | {:>px_w$} | {:>qty_w$} |",
+                    "Best ask",
+                    "-",
+                    ask_px,
+                    ask_qty,
+                    info_w = info_w,
+                    val_w = val_w,
+                    px_w = px_w,
+                    qty_w = qty_w
+                );
+                println!(
+                    "| {:info_w$} | {:val_w$} | {:>px_w$} | {:>qty_w$} |",
+                    "Best bid",
+                    "-",
+                    bid_px,
+                    bid_qty,
+                    info_w = info_w,
+                    val_w = val_w,
+                    px_w = px_w,
+                    qty_w = qty_w
+                );
+                println!("{sep}");
             }
         }
     }
 
     fn render_depth_view(&self, data: Option<&AggregatedDepthView>, status: Option<&str>) {
         if let Some(view) = data {
-            println!("Depth (aggregated): {}  (asks + bids)", view.instrument);
+            println!("Depth (aggregated): {}", view.instrument);
         } else {
             println!("Depth (aggregated): waiting for data...");
         }
@@ -800,21 +1005,40 @@ impl QueryManager {
             .asks
             .iter()
             .chain(view.bids.iter())
-            .map(|l| l.to_string().len())
+            .map(|l| Self::fmt_level_row(l.px().0, l.qty().0).len())
             .max()
-            .unwrap_or(27);
+            .unwrap_or(Self::PRICE_COL_WIDTH + Self::QTY_COL_WIDTH + 3);
 
         println!();
-        println!("ASKS");
+        let spread_text = view
+            .spread
+            .as_ref()
+            .map(|p| Self::fmt_price_adaptive(p.0))
+            .unwrap_or_else(|| "-".to_string());
+        println!("Spread: {}", spread_text);
         println!("{}", "-".repeat(level_w + 10));
+        println!("ASKS");
         for ask in view.asks.iter().rev() {
-            println!("  {}", ask);
+            println!("  {}", Self::fmt_level_row(ask.px().0, ask.qty().0));
         }
 
         println!("{}", "-".repeat(level_w + 10));
+        let mid_text = view
+            .mid
+            .as_ref()
+            .map(|p| Self::fmt_price_adaptive(p.0))
+            .unwrap_or_else(|| "-".to_string());
+        println!(
+            "  {:>price_width$}   {:>qty_width$}",
+            mid_text,
+            "MID",
+            price_width = Self::PRICE_COL_WIDTH,
+            qty_width = Self::QTY_COL_WIDTH
+        );
+        println!("{}", "-".repeat(level_w + 10));
         println!("BIDS");
-        for bid in &view.bids {
-            println!("  {}", bid);
+        for bid in view.bids.iter().rev() {
+            println!("  {}", Self::fmt_level_row(bid.px().0, bid.qty().0));
         }
     }
 

@@ -7,3 +7,4 @@ edition = "2024"
 md_core = { path = "../core" }
 tokio = { version = "1", features = ["full"] }
 crossterm = "0.28"
+rust_decimal = "1"

@@ -1,13 +1,28 @@
-use std::{cmp::Reverse, collections::BTreeMap, fmt::Display};
-use rust_decimal::Decimal;
+use core::fmt;
+use std::{cmp::{Ordering, Reverse}, collections::BTreeMap, fmt::Display};
+use rust_decimal::{Decimal, prelude::ToPrimitive};
 use rust_decimal_macros::dec;
 
 use crate::{helpers::book::{verify_checksum, ChecksumError}, types::{Price, Qty}};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BookLevel {
     qty: Qty,
     px: Price
+}
+
+impl PartialOrd for BookLevel {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for BookLevel {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.px
+            .cmp(&other.px)
+            .then_with(|| self.qty.cmp(&other.qty))
+    }
 }
 
 impl BookLevel {
@@ -27,15 +42,137 @@ impl BookLevel {
     }
 }
 
-impl Display for BookLevel {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        fn fmt_decimal(mut x: Decimal, scale: u32) -> String {
-            x.rescale(scale);
-            x.to_string()
-        }
+pub struct BookFormat {
+    pub price_scale: u32,
+    pub price_width: usize,
+    pub qty_width: usize,
+}
 
-        let px = fmt_decimal(self.px.0, 2);
-        let qty = fmt_decimal(self.qty.0, 5);
+impl BookFormat {
+    pub fn from_levels<'a, I>(levels: I) -> Self
+    where
+        I: IntoIterator<Item = &'a BookLevel>,
+    {
+        let collected: Vec<&BookLevel> = levels.into_iter().collect();
+
+        let price_scale = collected
+            .iter()
+            .map(|&lvl| adaptive_price_scale(lvl.px().0))
+            .max()
+            .unwrap_or(2);
+
+        Self {
+            price_scale,
+            price_width: 16,
+            qty_width: 12,
+        }
+    }
+
+    pub fn fmt_level(&self, level: &BookLevel) -> String {
+        let px = fmt_price_fixed(level.px().0, self.price_scale);
+        let qty = fmt_qty_human(level.qty().0);
+
+        format!(
+            "{:>price_width$}   {:>qty_width$}",
+            px,
+            qty,
+            price_width = self.price_width,
+            qty_width = self.qty_width
+        )
+    }
+
+    pub fn fmt_mid(&self, px: Decimal) -> String {
+        fmt_price_fixed(px, self.price_scale)
+    }
+}
+
+fn adaptive_price_scale(v: Decimal) -> u32 {
+    let s = v.normalize().to_string();
+    let abs = s.strip_prefix('-').unwrap_or(&s);
+
+    let Some(dot_idx) = abs.find('.') else {
+        return 2;
+    };
+
+    let int_part = &abs[..dot_idx];
+    let frac_part = &abs[dot_idx + 1..];
+
+    if int_part != "0" {
+        2
+    } else {
+        let leading_zeros = frac_part.chars().take_while(|c| *c == '0').count();
+        ((leading_zeros + 3) as u32).clamp(2, 10)
+    }
+}
+
+fn fmt_decimal_fixed(mut x: Decimal, scale: u32) -> String {
+    x.rescale(scale);
+    x.to_string()
+}
+
+fn fmt_price_fixed(px: Decimal, scale: u32) -> String {
+    fmt_decimal_fixed(px, scale)
+}
+
+fn fmt_qty_human(qty: Decimal) -> String {
+    let Some(val) = qty.to_f64() else {
+        return qty.normalize().to_string();
+    };
+
+    let abs = val.abs();
+
+    if abs >= 1_000_000_000.0 {
+        format!("{:.2}B", val / 1_000_000_000.0)
+    } else if abs >= 1_000_000.0 {
+        format!("{:.2}M", val / 1_000_000.0)
+    } else if abs >= 1_000.0 {
+        format!("{:.2}K", val / 1_000.0)
+    } else if abs >= 1.0 {
+        format!("{:.5}", val)
+    } else {
+        format!("{:.8}", val)
+    }
+}
+
+impl BookLevel {
+    fn price_scale_adaptive(px: Decimal) -> u32 {
+        let s = px.normalize().to_string();
+        let abs = s.strip_prefix('-').unwrap_or(&s);
+
+        let Some(dot_idx) = abs.find('.') else {
+            return 2;
+        };
+
+        let int_part = &abs[..dot_idx];
+        let frac_part = &abs[dot_idx + 1..];
+
+        if int_part != "0" {
+            2
+        } else {
+            let leading_zeros = frac_part.chars().take_while(|c| *c == '0').count();
+            ((leading_zeros + 3) as u32).clamp(2, 10)
+        }
+    }
+
+    fn fmt_decimal_fixed(mut x: Decimal, scale: u32) -> String {
+        x.rescale(scale);
+        x.to_string()
+    }
+
+    fn fmt_price_for_book(px: Decimal) -> String {
+        let scale = Self::price_scale_adaptive(px);
+        Self::fmt_decimal_fixed(px, scale)
+    }
+
+    fn fmt_qty_for_book(qty: Decimal) -> String {
+        Self::fmt_decimal_fixed(qty, 5)
+    }
+}
+
+impl Display for BookLevel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let px = Self::fmt_price_for_book(self.px.0);
+        let qty = Self::fmt_qty_for_book(self.qty.0);
 
         write!(f, "{:>12}   {:>12}", px, qty)
     }

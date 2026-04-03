@@ -5,7 +5,7 @@ use std::{
 use md_core::{
     book::BookLevel,
     logging::types::Component,
-    query::{AggregatedDepthLevel, AggregatedDepthView, BestLevelPerExchange, BookView, EngineQuery, ExchangeStatusView, SpreadView},
+    query::{AggregatedDepthView, BestLevelPerExchange, BookView, EngineQuery, ExchangeStatusView, SpreadView},
     types::{Exchange, ExchangeStatus, Instrument, Price, Qty},
 };
 use rust_decimal::prelude::ToPrimitive;
@@ -180,6 +180,10 @@ impl Engine {
         let mut best_ask: Option<(Exchange, BookLevel)> = None;
 
         for (&exchange, exchange_state) in &self.exchanges {
+            if exchange_state.get_status() != ExchangeStatus::Live {
+                continue;
+            }
+
             let exchange_best_bid = exchange_state
                 .top_n_bids(instrument, 1)
                 .ok()
@@ -232,9 +236,10 @@ impl Engine {
     fn query_depth(&self, instrument: &Instrument, depth: usize) -> AggregatedDepthView {
         let per_exchange_depth = depth;
 
-        let asks: Vec<AggregatedDepthLevel> = self
+        let asks: BTreeSet<BookLevel> = self
             .exchanges
             .values()
+            .filter(|exchange_state| exchange_state.get_status() == ExchangeStatus::Live)
             .filter_map(|exchange_state| exchange_state.top_n_asks(instrument, per_exchange_depth).ok())
             .flatten()
             .fold(BTreeMap::<Price, Qty>::new(), |mut acc, level| {
@@ -244,13 +249,14 @@ impl Engine {
                 acc
             })
             .into_iter()
-            .map(|(price, total_qty)| AggregatedDepthLevel { price, total_qty })
             .take(depth)
+            .map(|(price, total_qty)| BookLevel::new(total_qty, price))
             .collect();
 
-        let bids: Vec<AggregatedDepthLevel> = self
+        let bids: BTreeSet<BookLevel> = self
             .exchanges
             .values()
+            .filter(|exchange_state| exchange_state.get_status() == ExchangeStatus::Live)
             .filter_map(|exchange_state| exchange_state.top_n_bids(instrument, per_exchange_depth).ok())
             .flatten()
             .fold(BTreeMap::<Reverse<Price>, Qty>::new(), |mut acc, level| {
@@ -260,17 +266,27 @@ impl Engine {
                 acc
             })
             .into_iter()
-            .map(|(price, total_qty)| AggregatedDepthLevel {
-                price: price.0,
-                total_qty,
-            })
             .take(depth)
+            .map(|(reverse_px, total_qty)| BookLevel::new(total_qty, reverse_px.0))
             .collect();
+
+        let best_ask = asks.iter().next();
+        let best_bid = bids.iter().next_back();
+        let spread = match (best_ask, best_bid) {
+            (Some(ask), Some(bid)) => Some(*ask.px() - *bid.px()),
+            _ => None,
+        };
+        let mid = match (best_ask, best_bid) {
+            (Some(ask), Some(bid)) => Some((*ask.px() + *bid.px()) / Price(dec!(2))),
+            _ => None,
+        };
 
         AggregatedDepthView {
             instrument: instrument.clone(),
             asks,
             bids,
+            spread,
+            mid,
         }
     }
 
