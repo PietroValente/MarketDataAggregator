@@ -1,5 +1,6 @@
-use std::error::Error;
+use std::{collections::{BTreeMap, BTreeSet}, error::Error, fmt::Display};
 
+use rust_decimal::Decimal;
 use tokio::sync::oneshot;
 
 use crate::{book::BookLevel, types::{Exchange, ExchangeStatus, Instrument, Price, Qty}};
@@ -30,11 +31,11 @@ pub enum EngineQuery {
     },
     List {
         exchange: Option<Exchange>,
-        reply_to: oneshot::Sender<Vec<Instrument>>,
+        reply_to: oneshot::Sender<Result<BTreeSet<Instrument>, Box<dyn Error + Send + Sync + 'static>>>,
     },
     Search {
         query: String,
-        reply_to: oneshot::Sender<Vec<SearchResult>>,
+        reply_to: oneshot::Sender<BTreeMap<Instrument, Vec<Exchange>>>,
     },
     AllStatuses {
         reply_to: oneshot::Sender<Vec<ExchangeStatusView>>,
@@ -44,8 +45,7 @@ pub enum EngineQuery {
 pub struct ExchangeStatusView {
     pub exchange: Exchange,
     pub status: ExchangeStatus,
-    pub instruments: usize,
-    pub live_instruments: usize,
+    pub instruments: usize
 }
 
 pub struct BookView {
@@ -87,7 +87,16 @@ pub struct AggregatedDepthLevel {
     pub total_qty: Qty,
 }
 
-pub struct SearchResult {
-    pub instrument: Instrument,
-    pub exchanges: Vec<Exchange>,
+impl Display for AggregatedDepthLevel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        fn fmt_decimal(mut x: Decimal, scale: u32) -> String {
+            x.rescale(scale);
+            x.to_string()
+        }
+
+        let px = fmt_decimal(self.price.0, 2);
+        let qty = fmt_decimal(self.total_qty.0, 5);
+
+        write!(f, "{:>12}   {:>12}", px, qty)
+    }
 }

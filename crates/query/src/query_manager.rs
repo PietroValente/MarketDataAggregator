@@ -95,6 +95,220 @@ impl QueryManager {
                         }
                     }
                 }
+                "status_all" => {
+                    let (status_tx, status_rx) = oneshot::channel();
+
+                    let status_event = EngineMessage::Query(EngineQuery::AllStatuses {
+                        reply_to: status_tx
+                    });
+
+                    if let Err(e) = self.normalized_tx.blocking_send(status_event) {
+                        eprintln!("Error while sending the status request: {}", e);
+                        continue;
+                    }
+
+                    match status_rx.blocking_recv() {
+                        Ok(all_status) => {
+                            for exchange_status_view in all_status {
+                                println!("{}    {}    {}", exchange_status_view.exchange, exchange_status_view.status, exchange_status_view.instruments);
+                            }
+                        },
+                        Err(e) => {
+                            eprintln!("Error while receiving the status data: {}", e);
+                            continue;
+                        }
+                    }
+                }
+                "list" => {
+                    let mut exchange = None;
+                    if let Some(exchange_str) = line.next() {
+                        let exchange_specific = Exchange::from(exchange_str);
+                        if exchange_specific == Exchange::Unknown {
+                            eprintln!("Error: unrecognized exchange");
+                            continue;
+                        }
+                        exchange = Some(exchange_specific);
+                    };
+
+                    let (list_tx, list_rx) = oneshot::channel();
+
+                    let list_event = EngineMessage::Query(EngineQuery::List { 
+                        exchange, 
+                        reply_to: list_tx
+                    });
+
+                    if let Err(e) = self.normalized_tx.blocking_send(list_event) {
+                        eprintln!("Error while sending the status request: {}", e);
+                        continue;
+                    }
+
+                    match list_rx.blocking_recv() {
+                        Ok(msg) => {
+                            match msg {
+                                Ok(list) => {
+                                    for instrument in list {
+                                        println!("{instrument}");
+                                    }
+                                },
+                                Err(e) => {
+                                    println!("error: {}", e);
+                                }
+                            }
+                        },
+                        Err(e) => {
+                            eprintln!("Error while receiving the status data: {}", e);
+                            continue;
+                        }
+                    }
+                }
+                "best" => {
+                    let Some(instrument) = line.next() else {
+                        eprintln!("Error: missing instrument");
+                        continue;
+                    };
+                    let instrument = Instrument(instrument.to_uppercase());
+
+                    let (best_tx, best_rx) = oneshot::channel();
+
+                    let best_event = EngineMessage::Query(EngineQuery::Best { 
+                        instrument, 
+                        reply_to: best_tx
+                    });
+
+                    if let Err(e) = self.normalized_tx.blocking_send(best_event) {
+                        eprintln!("Error while sending the best request: {}", e);
+                        continue;
+                    }
+
+                    match best_rx.blocking_recv() {
+                        Ok(best_levels) => {
+                            for best in best_levels {
+                                println!("{}    {}    {}    best_bid: {:?}    best_ask: {:?}", best.exchange, best.status, best.instrument, best.best_bid, best.best_ask);
+                            }
+                        },
+                        Err(e) => {
+                            eprintln!("Error while receiving the best data: {}", e);
+                            continue;
+                        }
+                    }
+                },
+                "spread" => {
+                    let Some(instrument) = line.next() else {
+                        eprintln!("Error: missing instrument");
+                        continue;
+                    };
+                    let instrument = Instrument(instrument.to_uppercase());
+
+                    let (spread_tx, spread_rx) = oneshot::channel();
+
+                    let spread_event = EngineMessage::Query(EngineQuery::Spread { 
+                        instrument, 
+                        reply_to: spread_tx 
+                    });
+
+                    if let Err(e) = self.normalized_tx.blocking_send(spread_event) {
+                        eprintln!("Error while sending the spread request: {}", e);
+                        continue;
+                    }
+
+                    match spread_rx.blocking_recv() {
+                        Ok(msg) => {
+                            match msg {
+                                Some(spread_view) => {
+                                    println!("{}", spread_view.instrument);
+                                    println!("best_bid_exchange: {}", spread_view.best_bid_exchange);
+                                    println!("best_bid: {}", spread_view.best_bid);
+                                    println!("best_ask_exchange: {}", spread_view.best_ask_exchange);
+                                    println!("best_ask: {}", spread_view.best_ask);
+                                    println!("absolute_spread: {}", spread_view.absolute_spread);
+                                    println!("relative_spread_bps: {}", spread_view.relative_spread_bps);
+                                },
+                                None => {
+                                    println!("No exchange has the instrument");
+                                }
+                            }
+                        },
+                        Err(e) => {
+                            eprintln!("Error while receiving the spread data: {}", e);
+                            continue;
+                        }
+                    }
+                }
+                "search" => {
+                    let Some(query) = line.next() else {
+                        eprintln!("Error: missing query");
+                        continue;
+                    };
+
+                    let (search_tx, search_rx) = oneshot::channel();
+
+                    let search_event = EngineMessage::Query(EngineQuery::Search { 
+                        query: query.to_string().to_uppercase(),
+                        reply_to: search_tx
+                    });
+
+                    if let Err(e) = self.normalized_tx.blocking_send(search_event) {
+                        eprintln!("Error while sending the search request: {}", e);
+                        continue;
+                    }
+
+                    match search_rx.blocking_recv() {
+                        Ok(list) => {
+                            for (instrument, vec) in list {
+                                println!("{}    {:?}", instrument, vec);
+                            }
+                        },
+                        Err(e) => {
+                            eprintln!("Error while receiving the search data: {}", e);
+                            continue;
+                        }
+                    }
+                }
+                "depth" => {
+                    let Some(instrument) = line.next() else {
+                        eprintln!("Error: missing instrument");
+                        continue;
+                    };
+                    let instrument = Instrument(instrument.to_uppercase());
+
+                    let Some(depth_str) = line.next() else {
+                        eprintln!("Error: missing depth");
+                        continue;
+                    };
+
+                    let Ok(depth) = depth_str.parse::<usize>() else {
+                        eprintln!("Error: invalid number for n");
+                        continue;
+                    };
+
+                    let (depth_tx, depth_rx) = oneshot::channel();
+
+                    let depth_event = EngineMessage::Query(EngineQuery::Depth { 
+                        instrument, 
+                        depth, 
+                        reply_to: depth_tx
+                    });
+
+                    if let Err(e) = self.normalized_tx.blocking_send(depth_event) {
+                        eprintln!("Error while sending the search request: {}", e);
+                        continue;
+                    }
+
+                    match depth_rx.blocking_recv() {
+                        Ok(aggregate_view) => {
+                            let last_asks: Vec<String> = aggregate_view.asks.into_iter().map(|x| x.to_string()).collect();
+                            let last_bids: Vec<String> = aggregate_view.bids.into_iter().map(|x| x.to_string()).collect();
+                            self.render_top_mode(&aggregate_view.instrument, &last_asks, &last_bids, None);
+                        },
+                        Err(e) => {
+                            eprintln!("Error while receiving the depth data: {}", e);
+                            continue;
+                        }
+                    }
+                }
+                "clear" => {
+                    self.clear_screen();
+                }
                 "exit" => {
                     return;
                 }

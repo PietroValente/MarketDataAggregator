@@ -4,7 +4,7 @@ use rust_decimal_macros::dec;
 
 use crate::{helpers::book::{verify_checksum, ChecksumError}, types::{Price, Qty}};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct BookLevel {
     qty: Qty,
     px: Price

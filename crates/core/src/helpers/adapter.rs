@@ -44,7 +44,7 @@ pub fn compute_status(live_books: usize, total_books: usize) -> ExchangeStatus {
     if total_books == 0 {
         ExchangeStatus::Initializing(0.0)
     } else if live_books == total_books {
-        ExchangeStatus::Running
+        ExchangeStatus::Live
     } else {
         ExchangeStatus::Initializing(live_books as f32 / total_books as f32)
     }

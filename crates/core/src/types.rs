@@ -1,4 +1,4 @@
-use std::{fmt, ops::{Add, Deref, DerefMut, Div, Sub}};
+use std::{fmt, ops::{Add, Deref, DerefMut, Div, Mul, Sub}};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
@@ -18,6 +18,14 @@ impl Sub for Price {
 
     fn sub(self, rhs: Self) -> Self::Output {
         Price(self.0 - rhs.0)
+    }
+}
+
+impl Mul for Price {
+    type Output = Price;
+
+    fn mul(self, rhs: Self) -> Self::Output {
+        Price(self.0 * rhs.0)
     }
 }
 
@@ -49,8 +57,16 @@ impl DerefMut for Price {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Qty(pub Decimal);
+
+impl Add for Qty {
+    type Output = Qty;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        Qty(self.0 + rhs.0)
+    }
+}
 
 impl fmt::Display for Qty {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -78,7 +94,7 @@ impl Qty {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Instrument(pub String);
 
 impl fmt::Display for Instrument {
@@ -142,17 +158,17 @@ impl From<&str> for Exchange {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ExchangeStatus {
     Initializing(f32),
-    Running
+    Live
 }
 
 impl fmt::Display for ExchangeStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ExchangeStatus::Initializing(percentage) => write!(f, "Initializing: {:.2}%", percentage*100.0),
-            ExchangeStatus::Running => write!(f, "Running")
+            ExchangeStatus::Live => write!(f, "Live")
         }
     }
 }

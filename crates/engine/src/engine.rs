@@ -1,12 +1,12 @@
 use std::collections::HashMap;
-use md_core::{events::{BookEventType, ControlEvent, EngineMessage, EventEnvelope, NormalizedEvent}, logging::types::Component, query::EngineQuery, types::Exchange};
+use md_core::{events::{BookEventType, ControlEvent, EngineMessage, EventEnvelope, NormalizedEvent}, logging::types::Component, types::Exchange};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tracing::error;
 
 use crate::exchange_state::{ExchangeState, ExchangeStateError};
 
 pub struct Engine {
-    exchanges: HashMap<Exchange, ExchangeState>,
+    pub(crate) exchanges: HashMap<Exchange, ExchangeState>,
     rx: Receiver<EngineMessage>
 }
 
@@ -68,58 +68,7 @@ impl Engine {
                     }
                 },
                 EngineMessage::Query(engine_query) => {
-                    match engine_query {
-                        EngineQuery::ExchangeStatus { exchange, reply_to } => {
-                            let exchange_state = self.exchanges.get_mut(&exchange);
-
-                            let result = match exchange_state {
-                                Some(exchange_state) => {
-                                    Ok(exchange_state.get_status())
-                                },
-                                None => {
-                                    Err("exchange not found".into())
-                                }
-                            };
-
-                            if reply_to.send(result).is_err() {
-                                error!(exchange = ?exchange, component = ?Component::Engine, "error sending ExchangeStatus response")
-                            }
-                        },
-                        EngineQuery::Book { exchange, instrument, depth, reply_to } => {
-                            let exchange_state = self.exchanges.get_mut(&exchange);
-
-                            let result = match exchange_state {
-                                Some(exchange_state) => {
-                                    exchange_state.book_view(instrument, depth).map_err(|e| Box::from(e))
-                                },
-                                None => {
-                                    Err("exchange not found".into())
-                                }
-                            };
-
-                            if reply_to.send(result).is_err() {
-                                error!(exchange = ?exchange, component = ?Component::Engine, "error sending Book response")
-                            }
-                        },
-                        EngineQuery::Best { instrument: _, reply_to: _ } => {
-
-                        },
-                        EngineQuery::Spread { instrument: _, reply_to: _ } => {
-
-                        },
-                        EngineQuery::Depth { instrument: _, depth: _, reply_to: _ } => {
-
-                        },
-                        EngineQuery::List { exchange: _, reply_to: _ } => {
-
-                        },
-                        EngineQuery::Search { query: _, reply_to: _ } => {
-
-                        },
-                        EngineQuery::AllStatuses { reply_to: _ } => {
-
-                        }
-                    }
+                    self.handle_query(engine_query);
                 }
             }
         }
