@@ -1,334 +1,201 @@
 # Market Data Aggregator
 
-**A realistic, production‑style market data engine for multi‑exchange order book aggregation, built in Rust with a strong focus on performance, reliability, and observability.**
+**A production-style, multi-exchange market data engine in Rust:** live order books from several cryptocurrency venues, normalized into one domain model, queryable from a terminal CLI, with structured tracing persisted to ScyllaDB.
 
-This repository is not a toy example or a collection of isolated snippets. It is a complete, end‑to‑end system that connects to multiple cryptocurrency exchanges, streams order book data in real time, normalizes everything into a common format, and lets you query and compare instruments across venues from a single, consistent interface.  
+## Project overview
 
-The goal is twofold:
+**What it is.** A workspace of crates that connects to public WebSocket and REST market-data APIs, keeps in-memory L2 books per exchange and instrument, and exposes cross-venue views (best bid/ask, spreads, aggregated depth) through an interactive CLI.
 
-- **Solve a real problem**: make it easy to understand how the same instrument behaves on different exchanges – who has the best price, which venue is more liquid, how markets react to events across venues.
-- **Showcase solid engineering practices**: clean architecture, explicit concurrency decisions, strong error handling, structured tracing, and durable logging via ScyllaDB.
+**What it is for.** Comparing how the same instrument trades across venues, inspecting liquidity and microstructure in real time, and serving as a reference for how to handle flaky networks, inconsistent APIs, and snapshot/update synchronization without sacrificing clarity or observability.
 
-At the moment, Binance is fully integrated and used as the reference implementation; the architecture, traits, and control flows are designed so that other exchanges (Coinbase, OKX, Bybit, Bitget, …) plug into the same pattern.
 
 ---
 
-### Why this project exists
+## Architecture
 
-Real‑world market data systems are messy. Connections drop, updates arrive out of order, REST endpoints are slower than you expect, and different exchanges use completely different payloads and semantics.  
+### Data flow
 
-This project was born from the desire to:
+At runtime, data moves in one direction for market events and the opposite for control/resync. The diagram below is the mental model:
 
-- Work with **real market data** instead of artificial fixtures.
-- Design an architecture that can **survive real exchange behaviour**, not just the happy path.
-- Gain full control over the **trade‑offs between performance, correctness, and complexity**.
+![MarketDataAggregator Data_flow](https://github.com/PietroValente/MarketDataAggregator/blob/main/images/Data_flow.png)
 
-In other words, it is meant to look and feel like the core of a production‑grade market data service, but small enough to fit in a single repository and be fully understandable.
 
----
 
-### What the system does
+The system ingests real-time market data from multiple exchanges via WebSocket streams and REST snapshots.
+Each exchange is handled independently through an async Connector, responsible for managing connections, subscriptions, and reconnections.
 
-At a high level, `MarketDataAggregator`:
+Incoming data is sent through mpsc channels to a dedicated Adapter (Parser + Sync) running on its own thread. The adapter normalizes exchange-specific messages and ensures correct synchronization between snapshots and incremental updates.
 
-- Connects to multiple exchanges through **WebSockets** (for streaming depth updates) and **REST** (for snapshots).
-- Translates each venue’s specific payloads into a **shared, normalized model** (`Instrument`, `BookSnapshot`, `BookUpdate`, `NormalizedEvent`, …).
-- Maintains, in memory, a **per‑exchange view of every instrument’s order book**.
-- Exposes a local query interface so that you can:
-  - Ask for the **top N bids/asks** for a given instrument on a given exchange.
-  - Visually follow how a book evolves in real time.
-- Stores structured logs into **ScyllaDB**, so that every event in the system is traceable and easy to filter by component, exchange, or instrument.
+All normalized events are forwarded through a central engine message channel to a single-threaded Engine, which owns the global state. The engine maintains per-exchange state and updates the in-memory instrument order books, ensuring consistency without shared mutable state or locking.
+In addition, the engine performs data integrity checks (e.g. checksum validation) to detect inconsistencies or data loss and trigger resynchronization when needed.
 
-The long‑term vision is to make it trivial to compare the same symbol across venues – for example, to study spreads between Binance and Coinbase on `BTCUSDT`, or to inspect how liquidity concentrates differently on different books.
+A separate CLI thread interacts with the engine via oneshot channels, allowing synchronous queries (e.g. best bid/ask, spreads) without blocking the data pipeline.
 
----
+This design leverages message passing over shared state, providing strong isolation, predictable concurrency, and scalability across multiple exchanges.
 
-### Architectural overview
+### Core components
 
-The repository is organized as a Rust workspace, with a clear separation of responsibilities:
+| Crate / area | Role |
+|--------------|------|
+| **`app`** | Loads `config/config.toml`, initializes tracing + DB logging, spawns connectors (Tokio), adapters and engine (`std::thread`), and runs the query CLI until exit. |
+| **`md_core`** | Shared types (`Instrument`, `Exchange`, book primitives), `NormalizedEvent` / `EngineMessage` / `ControlEvent`, `ExchangeConnector` and `ExchangeAdapter` traits, connector helpers (reader/writer tasks, ping/pong), logging types and Scylla writer. |
+| **`engine`** | Single long-lived consumer of `EngineMessage`: applies snapshots and updates per exchange, serves queries via `oneshot` replies, triggers **resync** when consistency checks fail. |
+| **`query`** | Interactive CLI: live views and one-shot commands (list, search, status). |
+| **`exchanges/*`** | One crate per venue: connector (trait `ExchangeConnector`), **stateful** adapter (trait `ExchangeAdapter`), venue-specific types and JSON parsing. |
 
-- **`app`** – the main binary. It wires together connectors, parsers, the central engine, the interactive query interface, and the logging pipeline.
-- **`exchanges/*`** – one crate per exchange (Binance, Coinbase, OKX, Bybit, Bitget, …). Each exchange implements a common `ExchangeConnector` trait and defines its own parser and message types.
-- **`core` (`md_core`)** – shared domain model and infrastructure:
-  - Order book types (`BookSnapshot`, `BookUpdate`, `BookLevel`).
-  - Normalized events and queries (`NormalizedEvent`, `EventEnvelope`, `ControlEvent`, `NormalizedQuery`, …).
-  - The `ExchangeConnector` trait and reusable connection helpers (reader/writer tasks, ping/pong handling, etc.).
-  - Logging abstractions and types used by the custom `tracing` layer and the ScyllaDB writer.
-- **`engine`** – the in‑memory “brain” of the system:
-  - Maintains per‑exchange state.
-  - Applies snapshots and updates to local books.
-  - Answers top‑of‑book queries.
-  - Detects inconsistencies and drives resynchronization via control events.
-- **`query`** – a small interactive CLI. It sends normalized queries to the engine and renders the response in the terminal (e.g. continuous top‑of‑book view).
+### Connectors
 
-![MarketDataAggregator Architecture](https://github.com/PietroValente/MarketDataAggregator/blob/main/images/Architecture.png)
+Each venue implements **`ExchangeConnector`** (`md_core::traits::connector`): discover symbols (REST), build subscription batches, open one or more WebSockets (subject to `max_subscription_per_ws` in config), run reader/writer tasks, handle **ping/pong** via message passing, reconnect with backoff, and react to **`ControlEvent`** from the engine (e.g. full reconnect + snapshot-driven resync).
 
----
+The pattern is intentionally heavy-duty: depth is high-frequency, snapshots can be slow, and a single blocking call in the wrong place can stall a naive pipeline. Connection management keeps socket I/O and subscription logic in one place per exchange so failures are **localized** and retriable.
 
-### Concurrency model: message passing over locking
+### Engine
 
-One of the most important design decisions in this project is the **explicit choice to build concurrency around message passing instead of shared locks**.
+The **`Engine`** owns `HashMap<Exchange, ExchangeState>` and processes:
 
-Rust makes it relatively safe to share state with `Arc<Mutex<…>>`, but using locks everywhere is not automatically good architecture. For this kind of system – many IO‑bound tasks, high‑frequency messages, and clear ownership boundaries – message passing turned out to be a better fit.
+- **`EngineMessage::Apply`**: normalized status and book events (`BookEventType::Snapshot` / `Update`). On validation errors that imply a corrupt or gap-filled book (e.g. checksum / sequence semantics), it issues **resync** for that exchange only.
+- **`EngineMessage::Query`**: top-of-book, lists, cross-venue best and spread, aggregated depth, exchange status—each response is returned on a **`oneshot`** channel.
 
-The system relies heavily on:
+There is **no** shared `Arc<Mutex<…>>` around the books: the engine thread is the sole mutator of consolidated state.
 
-- `tokio::sync::mpsc` channels for **asynchronous pipelines**:
-  - Connectors → Parsers → Engine.
-  - Engine → Connectors (control channels).
-  - Query interface → Engine.
-- `tokio::sync::oneshot` channels for **request/response style** interactions, especially for queries (e.g. “give me the top 10 bids on Binance for BTCUSDT”).
+### Adapters (from parsers to stateful components)
 
-This approach has several concrete advantages:
+Early designs used **stateless parsers**: turn a frame into a normalized event and forward it. That breaks down as soon as you need **per-instrument sync state**—for example last applied update id, buffering depth updates until a REST snapshot arrives, or venue-specific sequence rules. Those concerns do not belong in a pure parse function, so the codebase uses **`ExchangeAdapter`** instead: a long-lived loop that **owns** that state.
 
-- **No hidden locking costs** on hot paths. State lives inside well‑defined components (engine, connector managers, parsers) instead of being shared behind locks.
-- **Backpressure is explicit**. If a channel is full, you can reason about what it means (downstream is slower than upstream) and tune buffer sizes or processing speed, instead of discovering contention through random lock timings.
-- **Failure isolation**. If one connector misbehaves or slows down, it only affects the messages it owns. The rest of the system, and other exchanges, keep running.
-- **Easier mental model**. Each component is essentially a single‑threaded event loop over its own inbox, which is a very robust model for systems with lots of IO.
+Each exchange crate still defines **wire-format types** and deserializes JSON/text into them. The adapter then:
 
-Avoiding locking here was a deliberate choice. It required a bit more thinking up front about **which component owns which responsibility**, but it pays off in predictable performance and a clear flow of data.
+- Updates **internal maps** (e.g. per-`Instrument` book sync status, pending updates, counters).
+- **`validate_snapshot` / `validate_update`** (`md_core::traits::adapter`) enforce continuity before anything reaches the engine.
+- Emits **`NormalizedEvent`** inside `EventEnvelope` on the engine channel, and reports **initialization status** so the CLI can show progress.
 
----
+Low-level deserialization remains local to each venue; the **named component** in the architecture is the adapter, not a separate parser crate.
 
-### Performance and reliability focus
+Shared logic (sending normalized events and status with correct exchange tags, clearing book state on resync helpers, etc.) lives in **`md_core::helpers::adapter`** as generic helpers over `ExchangeAdapter`, which limits duplication across venues without hiding the fact that each adapter is **stateful**.
 
-From the start, the project was shaped by three main qualities:
+### Concurrency model
 
-- **Performance**
-  - Minimal and intentional use of `clone`, especially for heavy data structures.
-  - No global `Mutex` in the critical path – state is owned by long‑lived components and accessed through channels.
-  - Bounded concurrency for REST snapshot fetching, to utilize network resources without overwhelming the exchange or the machine.
-- **Reliability**
-  - Every exchange connector implements **reconnect and resubscribe logic** with exponential backoff.
-  - The engine actively checks for **gaps and inconsistencies** in local order books; when it detects an issue, it doesn’t guess – it asks the connector to resynchronize from snapshots.
-  - Queries are built on top of one‑shot channels, so each request has a clear lifecycle and either receives a response or fails in a controlled way.
-- **Observability**
-  - Deep integration with `tracing` provides structured logs with context about **which component, which exchange, and which instrument** is involved.
-  - All logs are persisted to ScyllaDB, making it easy to ask: *“What happened to Binance’s connector in the last 5 minutes?”* or *“How often did we resync BTCUSDT today?”*
+The design favors **message passing over locking**:
 
-These constraints forced the architecture to evolve beyond the naive idea that “each request only takes a few milliseconds”. In practice, **network and exchange behaviour can be much worse**, and the code is written for that reality, not for the ideal case.
+- **`tokio::sync::mpsc`** for pipelines: raw messages, normalized engine messages, control to connectors, log events.
+- **`tokio::sync::oneshot`** for request/response (queries and other one-shot replies).
+
+**Effects:**
+
+- **Actor-like boundaries.** Connectors, adapters, engine, and query UI each consume their own inbox; hot paths do not pay hidden mutex contention.
+- **Backpressure.** Bounded channels make overload visible: tuning buffer sizes is a deliberate trade-off instead of an emergent lock fight.
+- **Isolation per exchange.** A slow or broken connector affects mostly that venue’s streams; others keep progressing.
+- **Hybrid runtime.** Connectors use **Tokio**; engine, adapters, and the CLI use **blocking** `std::thread` loops with `blocking_send` / `blocking_recv`. The important part is still **no shared mutable state** across those threads—only messages.
 
 ---
 
-### The most challenging part: exchange connectors
+## Engineering approach
 
-The hardest and most interesting part of this project is the family of **exchange connectors**.
-
-On paper, they seem straightforward:
-
-1. Open a WebSocket.
-2. Subscribe to some streams.
-3. Read messages and push them downstream.
-
-In practice:
-
-- Depth updates are very frequent and can arrive in bursts.
-- REST endpoints for snapshots can be slow, rate‑limited, or temporarily unavailable.
-- Connections drop, and re‑subscribing takes longer than expected.
-- A request that “should” take a few milliseconds can suddenly take hundreds of milliseconds or more.
-
-If the architecture assumes everything is always fast, **a single slow operation can stall the entire system**.
-
-To deal with this, connectors are built around a dedicated **connection manager**:
-
-- Manages **multiple WebSocket connections** per exchange, each responsible for a subset of instruments.
-- Spawns a **reader task** and a **writer task** for each connection:
-  - Readers push inbound messages into a unified channel (`InboundEvent`), including pings, binary/text frames, and connection‑closed events.
-  - Writers receive commands (`WriteCommand`) such as “send this raw subscription payload” or “respond with a Pong”.
-- Handles **ping/pong** fully via message passing. The application never touches the raw socket from multiple places.
-- Coordinates **recreate with snapshots**:
-  - On a resync request from the engine, it aborts all current connections.
-  - Opens fresh WebSockets and resubscribes to all streams.
-  - Fetches snapshots via REST and feeds them into the system so the books are consistent again.
-- Applies **exponential backoff** when something goes wrong, instead of hammering the exchange.
-
-This design emerged from hitting exactly the problem you would expect in a real system: a supposedly “fast” operation becoming slow enough to **slow down the whole pipeline**, which forced a rethink of responsibility boundaries and retry strategies.
+1. **Make the full path work end-to-end** for one exchange, then replicate the pattern for others.
+2. **Lock behavior with tests** (especially the engine): snapshot + update sequences, resync triggers, unknown instruments, query edge cases. Tests allow **iterative refactors** without guessing.
+3. **Consolidate duplication** only after behavior is clear—e.g. generic helpers and traits in `md_core` so each venue stays thin.
+4. **Observability early** (structured `tracing` + durable logs); **profiling** as a later pass once the architecture is stable.
 
 ---
 
-### Querying the aggregated books
+## Design principles
 
-Once the connectors and engine are running, the **query manager** gives you a way to interact with the data from the terminal.
+| Principle | Rationale |
+|-----------|-----------|
+| **Low latency** | Avoid contended locks on the book hot path; keep adapter validation and normalization tight; use bounded queues so you can reason about lag. |
+| **Fault tolerance** | Reconnect + backoff; engine-driven **resync** when local books cannot be trusted; unknown exchanges or instruments do not take down the process. |
+| **Scalability** | More venues mean more connector+adapter pairs and more WebSocket fan-out—the model is **sharded by exchange** rather than one giant shared state. |
+| **Observability** | Structured fields (`component`, `exchange`, `instrument`) and ScyllaDB storage support operational questions (“what failed for OKX in the last hour?”). |
+| **Concurrency philosophy** | Prefer **explicit messages** and ownership over `Arc<Mutex<…>>`; use **bounded** channels for **backpressure**; keep **isolation per exchange** so one venue cannot silently stall the whole system. |
 
-The primary command is:
+---
+
+## Observability
+
+- **`tracing`** is used throughout connectors, adapters, engine, and query code with consistent metadata so logs are filterable in production tooling.
+- **`DbLoggingLayer`** forwards events into a **non-blocking** bounded channel; if the buffer is full, events may be dropped so logging never blocks the market path.
+- **`DbLoggingWriter`** applies `config/init.cql` (if needed) and writes to ScyllaDB tables keyed for typical queries (e.g. by time, component, exchange, instrument).
+
+**Why ScyllaDB.** Log volume is append-heavy and time-ordered—similar to time-series and operational telemetry. ScyllaDB fits wide, partition-friendly access patterns and can scale out if you keep the log path separate from the in-memory hot path. For local development, a single-node container is enough.
+
+**Optional: DbVisualizer** (or any CQL-capable client) can connect to `127.0.0.1:9042` to inspect schemas and run ad hoc queries on stored events—useful when debugging resync storms or connector errors.
+
+---
+
+## Usage
+
+Start the app (`cargo run -p app` after configuration). The CLI prints a command menu. Exchange names are **case-insensitive** (`binance`, `okx`, …).
+
+| Command | Description |
+|---------|-------------|
+| `book <exchange> <instrument> <depth>` | Live book: asks above, bids below, mid in the center. **Esc** returns to the menu. |
+| `best <instrument>` | Live best bid/ask **per exchange**. |
+| `spread <instrument>` | Live **cross-exchange** spread view. |
+| `depth <instrument> <depth>` | Live **aggregated** depth across venues. |
+| `status <exchange>` | One-shot connectivity / initialization status for one venue. |
+| `status --all` or `status_all` | Live status for all exchanges. |
+| `list [exchange]` | One-shot list of instruments (optional filter by exchange). |
+| `search …` | Prefix search; or `--contains`, `--suffix`, `--glob` with optional `--limit N`. |
+| `clear` | Clear the terminal screen. |
+| `exit` | Quit the application. |
+
+**Examples:**
 
 ```text
-top <exchange> <instrument> <n>
+book binance BTCUSDT 10
+best ETHUSDT
+spread BTCUSDT
+depth SOLUSDT 15
+status okx
+list bybit
+search BTC
 ```
 
-For example:
-
-- `top BINANCE BTCUSDT 10`
-- `top COINBASE ETHUSD 5`
-
-When you run this command:
-
-1. The query manager switches into a special “top mode” for that instrument.
-2. On a fixed interval (e.g. every 500ms), it:
-   - Sends a `TopAsk` and a `TopBid` query to the engine.
-   - Waits for the responses via one‑shot channels.
-   - Renders the resulting asks and bids in a compact visual view.
-3. You can follow how the book moves in real time; pressing `Esc` exits the mode and returns you to the CLI prompt.
-
-This is intentionally minimal, but powerful enough to **inspect and compare the shape of order books across exchanges** in the same process.
-
 ---
 
-### Tracing, error handling, and ScyllaDB logging
+## Installation and setup
 
-A big part of making this project “production‑style” is the emphasis on **tracing and persistent logs**.
+**Requirements**
 
-The logging pipeline has three layers:
+- Rust toolchain (edition compatible with the workspace `Cargo.toml`).
+- Network access to the exchanges’ public endpoints.
+- **Docker** (optional but recommended) for ScyllaDB logging.
 
-1. **`tracing` integration**
-   - All significant components (connectors, engine, parsers, query manager) emit `tracing` events.
-   - Each event carries structured fields:
-     - `component` (e.g. `Connector`, `Engine`).
-     - `exchange` (e.g. `Binance`).
-     - `instrument` (when applicable).
-   - Very low‑level `TRACE` logs are filtered out to keep the signal-to-noise ratio high.
-
-2. **`DbLoggingLayer`**
-   - This is a custom `tracing_subscriber::Layer` that converts `tracing` events into domain‑specific `LogEvent` values.
-   - It extracts metadata (level, target, file, line) and the message, plus the custom fields (`component`, `exchange`, `instrument`).
-   - It sends `LogEvent` instances through a non‑blocking channel. If the channel is full, the event is silently dropped rather than slowing down the main path.
-
-3. **`DbLoggingWriter` + ScyllaDB**
-   - Runs in a dedicated async task started by the main app.
-   - On startup, it reads a CQL initialization file and creates the necessary keyspace and tables if they are missing.
-   - It persists logs into multiple tables optimized for common queries:
-     - Per‑instrument logs.
-     - Per‑(component, exchange) logs.
-     - Generic logs without exchange/instrument.
-
-Why ScyllaDB?
-
-- Market data systems generate **append‑only, time‑series data** – exactly the kind of workload ScyllaDB is optimized for.
-- You typically want to ask questions like:
-  - “Show me all ERROR logs for Binance’s connector in the last N minutes.”
-  - “Show me all logs related to this particular instrument around a specific timestamp.”
-- With ScyllaDB’s data model and clustering keys, these queries can be made efficient and horizontally scalable.
-
-For development, ScyllaDB runs locally in Docker. This keeps the setup easy while still reflecting how a real deployment would treat logging as a separate, scalable concern.
-
----
-
-### Testing and edge cases
-
-Special attention is given to **tests that mirror realistic edge cases**, especially around the engine:
-
-- **Snapshot + update correctness**
-  - Tests validate that a snapshot followed by multiple updates leads to the expected final order book.
-  - The engine’s `top_n_bid` and `top_n_ask` queries are checked for both price and quantity.
-- **Unknown exchanges**
-  - If an event comes in tagged with an exchange the engine doesn’t know, the engine simply logs the situation and keeps going. There is no panic.
-- **Resync semantics**
-  - When the engine detects a gap in update IDs (meaning its local book is no longer guaranteed to be consistent), it emits a `Resync` control event for that exchange.
-  - Separate tests ensure that not every error leads to resync. For example, an update for an instrument that was never initialized should **not** trigger a resync; it is treated as a data‑quality issue, not a synchronization problem.
-- **Missing instruments in queries**
-  - Queries for instruments that are not known (or not yet synchronized) are handled gracefully. The engine either returns empty results or lets the one‑shot sender drop, but it does not crash.
-
-Taken together, these tests ensure that the system behaves sensibly not just when everything is perfect, but also when data arrives late, out of order, or for instruments you didn’t expect.
-
----
-
-### AI’s role in the project
-
-AI played an important part in this project, but not as an autopilot. Instead, it was used as a **design partner and refactoring assistant**:
-
-- During the early stages, AI helped explore different architectural options:
-  - How to structure the connector trait.
-  - How to decouple the engine from the connectors via control channels.
-  - How to build a logging pipeline that doesn’t block the critical path.
-- AI was used to draft and refine individual components, tests, and documentation, always followed by **manual review, adjustment, and integration**.
-- When performance or complexity issues appeared (for example, realizing that some operations took much longer than expected and slowed down the whole system), AI suggestions were used as input to rethink the architecture, not as the final word.
-
-The final codebase reflects this collaboration: AI accelerated the exploration of ideas, while the final architecture, trade‑offs, and critical decisions are the result of deliberate human control.
-
----
-
-### Rough guide to the code
-
-A quick (non‑exhaustive) overview of where to look:
-
-- **`crates/app/src/main.rs`**
-  - Entry point. Loads configuration, sets up tracing and the ScyllaDB logging pipeline, creates channels, and wires together connectors, parsers, engine, and query manager.
-- **`crates/core/src`**
-  - `types.rs`: core domain types (exchanges, instruments, prices, quantities, etc.).
-  - `book.rs`: structures and utilities for maintaining order books.
-  - `events.rs`: normalized events and queries; the language the engine speaks.
-  - `connector_trait.rs`: the `ExchangeConnector` trait and its helper tasks for readers/writers.
-  - `logging/*`: the types, layer, and writer that connect `tracing` to ScyllaDB.
-- **`crates/engine/src`**
-  - `engine.rs`: the central loop that receives normalized events, updates state, and replies to queries. Contains the bulk of the engine tests.
-  - `exchange_state.rs`: per‑exchange local book state and related logic.
-  - `client.rs`: convenience utilities for talking to the engine.
-- **`crates/exchanges/binance/src`**
-  - `connector.rs`: the reference implementation of an exchange connector, including the connection manager, resync protocol, and backoff logic.
-  - `parser.rs`: transforms raw Binance messages into normalized events.
-  - `types.rs`: Binance‑specific message representations.
-- **`crates/query/src/query_manager.rs`**
-  - The interactive CLI responsible for `top` commands and the “top mode” visualization.
-
-The other exchange crates follow the same pattern and are designed to be filled in following the Binance implementation.
-
----
-
-### Running the project locally
-
-To get the full experience (including ScyllaDB logging), you will need:
-
-- A recent Rust toolchain.
-- Docker, to spin up ScyllaDB.
-- Network access to the exchanges’ public market data endpoints.
-
-**1. Start ScyllaDB via Docker**
+**1. ScyllaDB (optional logging)**
 
 ```bash
-docker run -d --name scylla \
-  -p 9042:9042 \
-  scylladb/scylla
+docker run -d --name scylla -p 9042:9042 scylladb/scylla
 ```
 
-Make sure the URI in your configuration (e.g. `127.0.0.1:9042`) matches this.
+If the DB writer fails to start, the app prints a warning and **continues without persisting logs** (see `app` startup).
 
-**2. Configure the application**
+**2. Configuration**
 
-Edit your configuration file (for example `config/config.toml`) to specify:
+Copy or edit `config/config.toml`:
 
-- Exchange URLs (REST and WebSocket) for each venue.
-- Channel buffer sizes (raw, normalized, control, logs).
-- ScyllaDB connection details and the path to the CQL initialization script.
+- **`[scylladb]`** — `uri` (e.g. `127.0.0.1:9042`) and `init_path` to `config/init.cql`.
+- **`[channels]`** — `raw_buffer`, `normalized_buffer`, `control_buffer`, `log_buffer`.
+- **Per-exchange sections** — REST `exchange_info`, WebSocket URL, `max_subscription_per_ws`. Binance also sets `snapshot` REST URL for depth snapshots.
 
-**3. Run the main app**
+**3. Run**
 
-From the workspace root:
+From the repository root:
 
 ```bash
 cargo run -p app
 ```
 
-You should see initialization logs, followed by the query prompt. From there you can use commands like:
+---
 
-```text
-top BINANCE BTCUSDT 10
-```
+## Challenges
 
-to inspect the live order book.
+- **Exchange inconsistency** — Different naming, precision, message shapes, and depth semantics; normalization hides this from the engine but each connector/adapter pair must encode the quirks.
+- **Snapshot / update synchronization** — You must align REST snapshots with WebSocket update IDs (where applicable) and buffer or drop updates correctly until the book is valid; mistakes show up as checksum or sequence errors and **resync** storms.
+- **WebSocket behavior** — Multi-connection fan-out, subscription limits, ping/pong deadlines, and abrupt disconnects; requires dedicated reader/writer tasks and backoff, not a single naive loop.
+- **State management** — **Adapters** hold venue-local sync state (sequences, buffers until snapshot); the **engine** holds consolidated L2 books and drives resync. Deciding whether an anomaly is a **sync** problem (resync) vs. a **data** problem (log and continue) spans both layers.
 
 ---
 
-### Future directions
+## Profiling
 
-This codebase is intentionally structured so that it can grow in several directions:
+Structured logging and tracing are in place; **CPU and async profiling** (e.g. flamegraphs, Tokio console, deeper connector latency histograms) are planned as a next step once workloads and deployment targets are fixed.
 
-- **Cross‑exchange comparison tools**
-  - Turn the current per‑exchange `top` view into true cross‑venue analytics (spreads, synthetic best bid/ask across all venues, per‑venue imbalance).
-- **Historical storage of normalized books**
-  - Use a similar ScyllaDB‑style approach, or another time‑series store, to persist normalized books for backtesting and research.
-- **Alerting and monitoring**
-  - Build alerting on top of the logging and tracing data, e.g. “alert if an exchange resyncs more than N times in M minutes”.
-- **Richer user interfaces**
-  - Expose an HTTP API or a web UI on top of the engine while keeping the same internal message‑passing and logging architecture.
-
-Even in its current state, the project represents a realistic, carefully‑designed foundation for a market data service, with a strong emphasis on concurrency, correctness, and observability – the same qualities that matter in production systems.
