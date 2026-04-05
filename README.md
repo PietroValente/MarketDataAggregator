@@ -19,8 +19,6 @@ At runtime, data moves in one direction for market events and the opposite for c
 
 ![MarketDataAggregator Data_flow](https://github.com/PietroValente/MarketDataAggregator/blob/main/images/Data_flow.png)
 
-
-
 The system ingests real-time market data from multiple exchanges via WebSocket streams and REST snapshots.
 Each exchange is handled independently through an async Connector, responsible for managing connections, subscriptions, and reconnections.
 
@@ -44,6 +42,8 @@ This design leverages message passing over shared state, providing strong isolat
 | **`exchanges/*`** | One crate per venue: connector (trait `ExchangeConnector`), **stateful** adapter (trait `ExchangeAdapter`), venue-specific types and JSON parsing. |
 
 ### Connectors
+
+![MarketDataAggregator Connector](https://github.com/PietroValente/MarketDataAggregator/blob/main/images/Connector.png)
 
 Each venue implements **`ExchangeConnector`** (`md_core::traits::connector`): discover symbols (REST), build subscription batches, open one or more WebSockets (subject to `max_subscription_per_ws` in config), run reader/writer tasks, handle **ping/pong** via message passing, reconnect with backoff, and react to **`ControlEvent`** from the engine (e.g. full reconnect + snapshot-driven resync).
 
