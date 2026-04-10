@@ -714,7 +714,7 @@ impl QueryManager {
                 println!();
             }
         }
-        if items.len() % cols != 0 {
+        if !items.len().is_multiple_of(cols) {
             println!();
         }
     }

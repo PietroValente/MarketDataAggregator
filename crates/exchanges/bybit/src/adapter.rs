@@ -395,13 +395,12 @@ mod tests {
 
         let mut saw_update = false;
         while let Ok(msg) = normalized_rx.try_recv() {
-            if let EngineMessage::Apply(envelope) = msg {
-                if let NormalizedEvent::Book(BookEventType::Update, book) = envelope.event {
-                    if book.instrument == instrument("BTCUSDT") {
-                        saw_update = true;
-                        break;
-                    }
-                }
+            if let EngineMessage::Apply(envelope) = msg
+                && let NormalizedEvent::Book(BookEventType::Update, book) = envelope.event
+                && book.instrument == instrument("BTCUSDT")
+            {
+                saw_update = true;
+                break;
             }
         }
         assert!(
@@ -437,17 +436,17 @@ mod tests {
         let mut init_zero = 0usize;
         let mut init_half = 0usize;
         while let Ok(msg) = normalized_rx.try_recv() {
-            if let EngineMessage::Apply(envelope) = msg {
-                if let NormalizedEvent::ApplyStatus(status) = envelope.event {
-                    match status {
-                        ExchangeStatus::Initializing(p) if (p - 0.0).abs() < f32::EPSILON => {
-                            init_zero += 1
-                        }
-                        ExchangeStatus::Initializing(p) if (p - 0.5).abs() < f32::EPSILON => {
-                            init_half += 1
-                        }
-                        _ => {}
+            if let EngineMessage::Apply(envelope) = msg
+                && let NormalizedEvent::ApplyStatus(status) = envelope.event
+            {
+                match status {
+                    ExchangeStatus::Initializing(p) if (p - 0.0).abs() < f32::EPSILON => {
+                        init_zero += 1
                     }
+                    ExchangeStatus::Initializing(p) if (p - 0.5).abs() < f32::EPSILON => {
+                        init_half += 1
+                    }
+                    _ => {}
                 }
             }
         }

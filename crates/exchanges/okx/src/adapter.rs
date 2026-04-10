@@ -478,12 +478,11 @@ mod tests {
 
         let mut update_count = 0usize;
         while let Ok(msg) = normalized_rx.try_recv() {
-            if let EngineMessage::Apply(envelope) = msg {
-                if let NormalizedEvent::Book(BookEventType::Update, book) = envelope.event {
-                    if book.instrument == instrument("BTCUSDT") {
-                        update_count += 1;
-                    }
-                }
+            if let EngineMessage::Apply(envelope) = msg
+                && let NormalizedEvent::Book(BookEventType::Update, book) = envelope.event
+                && book.instrument == instrument("BTCUSDT")
+            {
+                update_count += 1;
             }
         }
         assert_eq!(

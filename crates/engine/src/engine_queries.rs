@@ -254,7 +254,7 @@ impl Engine {
             }
         }
 
-        let result = match (best_bid, best_ask) {
+        match (best_bid, best_ask) {
             (Some((best_bid_exchange, best_bid)), Some((best_ask_exchange, best_ask))) => {
                 let absolute_spread = *best_ask.px() - *best_bid.px();
                 let mid = (*best_ask.px() + *best_bid.px()) / Price(dec!(2));
@@ -273,9 +273,7 @@ impl Engine {
                 })
             }
             _ => None,
-        };
-
-        result
+        }
     }
 
     fn query_depth(&self, instrument: &Instrument, depth: usize) -> AggregatedDepthView {
