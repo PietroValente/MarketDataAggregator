@@ -1,8 +1,14 @@
-use std::{collections::{BTreeMap, BTreeSet}, error::Error};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    error::Error,
+};
 
 use tokio::sync::oneshot;
 
-use crate::{book::BookLevel, types::{Exchange, ExchangeStatus, Instrument, Price}};
+use crate::{
+    book::BookLevel,
+    types::{Exchange, ExchangeStatus, Instrument, Price},
+};
 
 pub enum EngineQuery {
     ExchangeStatus {
@@ -13,7 +19,7 @@ pub enum EngineQuery {
         exchange: Exchange,
         instrument: Instrument,
         depth: usize,
-        reply_to: oneshot::Sender<Result<BookView, Box<dyn Error + Send + Sync + 'static>>>
+        reply_to: oneshot::Sender<Result<BookView, Box<dyn Error + Send + Sync + 'static>>>,
     },
     Best {
         instrument: Instrument,
@@ -30,7 +36,8 @@ pub enum EngineQuery {
     },
     List {
         exchange: Option<Exchange>,
-        reply_to: oneshot::Sender<Result<BTreeSet<Instrument>, Box<dyn Error + Send + Sync + 'static>>>,
+        reply_to:
+            oneshot::Sender<Result<BTreeSet<Instrument>, Box<dyn Error + Send + Sync + 'static>>>,
     },
     Search {
         query: String,
@@ -59,7 +66,7 @@ pub enum EngineQuery {
 pub struct ExchangeStatusView {
     pub exchange: Exchange,
     pub status: ExchangeStatus,
-    pub instruments: usize
+    pub instruments: usize,
 }
 
 pub struct BookView {

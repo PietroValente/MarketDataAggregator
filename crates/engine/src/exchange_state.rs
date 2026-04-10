@@ -1,8 +1,15 @@
-use md_core::{book::{BookLevel, LocalBook}, events::{ControlEvent, NormalizedBookData}, helpers::book::ChecksumError, logging::types::Component, query::BookView, types::{Exchange, ExchangeStatus, Instrument}};
-use tokio::sync::mpsc::Sender;
-use tracing::{error, info};
+use md_core::{
+    book::{BookLevel, LocalBook},
+    events::{ControlEvent, NormalizedBookData},
+    helpers::book::ChecksumError,
+    logging::types::Component,
+    query::BookView,
+    types::{Exchange, ExchangeStatus, Instrument},
+};
 use std::collections::{BTreeSet, HashMap};
 use thiserror::Error;
+use tokio::sync::mpsc::Sender;
+use tracing::{error, info};
 
 pub struct ExchangeState {
     exchange: Exchange,
@@ -17,7 +24,7 @@ impl ExchangeState {
             exchange,
             status: ExchangeStatus::Initializing(0.0),
             markets: HashMap::new(),
-            control_tx
+            control_tx,
         }
     }
 
@@ -39,7 +46,10 @@ impl ExchangeState {
         }
     }
 
-    pub fn apply_snapshot(&mut self, snapshot: NormalizedBookData) -> Result<(), ExchangeStateError> {
+    pub fn apply_snapshot(
+        &mut self,
+        snapshot: NormalizedBookData,
+    ) -> Result<(), ExchangeStateError> {
         let NormalizedBookData {
             instrument,
             levels,
@@ -50,21 +60,17 @@ impl ExchangeState {
             .markets
             .entry(instrument.clone())
             .or_insert_with(LocalBook::new);
-    
+
         book.apply_snapshot(levels);
-    
+
         if let Some(expected) = checksum {
-            book.verify_okx_bitget_checksum(expected).map_err(|source| {
-                ExchangeStateError::ChecksumError {
-                    instrument,
-                    source,
-                }
-            })?;
+            book.verify_okx_bitget_checksum(expected)
+                .map_err(|source| ExchangeStateError::ChecksumError { instrument, source })?;
         }
-    
+
         Ok(())
     }
-    
+
     pub fn apply_update(&mut self, update: NormalizedBookData) -> Result<(), ExchangeStateError> {
         let NormalizedBookData {
             instrument,
@@ -76,18 +82,14 @@ impl ExchangeState {
             .markets
             .get_mut(&instrument)
             .ok_or_else(|| ExchangeStateError::InstrumentNotFound(instrument.clone()))?;
-    
+
         book.apply_update(levels);
-    
+
         if let Some(expected) = checksum {
-            book.verify_okx_bitget_checksum(expected).map_err(|source| {
-                ExchangeStateError::ChecksumError {
-                    instrument,
-                    source,
-                }
-            })?;
+            book.verify_okx_bitget_checksum(expected)
+                .map_err(|source| ExchangeStateError::ChecksumError { instrument, source })?;
         }
-    
+
         Ok(())
     }
 
@@ -111,18 +113,39 @@ impl ExchangeState {
         self.status.clone()
     }
 
-    pub fn top_n_asks(&self, instrument: &Instrument, depth: usize) -> Result<Vec<BookLevel>, ExchangeStateError> {
-        let local_book = self.markets.get(&instrument).ok_or_else(|| {ExchangeStateError::InstrumentNotFound(instrument.clone())})?;
+    pub fn top_n_asks(
+        &self,
+        instrument: &Instrument,
+        depth: usize,
+    ) -> Result<Vec<BookLevel>, ExchangeStateError> {
+        let local_book = self
+            .markets
+            .get(&instrument)
+            .ok_or_else(|| ExchangeStateError::InstrumentNotFound(instrument.clone()))?;
         Ok(local_book.top_n_asks(depth))
     }
 
-    pub fn top_n_bids(&self, instrument: &Instrument, depth: usize) -> Result<Vec<BookLevel>, ExchangeStateError> {
-        let local_book = self.markets.get(&instrument).ok_or_else(|| ExchangeStateError::InstrumentNotFound(instrument.clone()))?;
+    pub fn top_n_bids(
+        &self,
+        instrument: &Instrument,
+        depth: usize,
+    ) -> Result<Vec<BookLevel>, ExchangeStateError> {
+        let local_book = self
+            .markets
+            .get(&instrument)
+            .ok_or_else(|| ExchangeStateError::InstrumentNotFound(instrument.clone()))?;
         Ok(local_book.top_n_bids(depth))
     }
 
-    pub fn book_view(&self, instrument: Instrument, depth: usize) ->  Result<BookView, ExchangeStateError> {
-        let local_book = self.markets.get(&instrument).ok_or_else(|| {ExchangeStateError::InstrumentNotFound(instrument.clone())})?;
+    pub fn book_view(
+        &self,
+        instrument: Instrument,
+        depth: usize,
+    ) -> Result<BookView, ExchangeStateError> {
+        let local_book = self
+            .markets
+            .get(&instrument)
+            .ok_or_else(|| ExchangeStateError::InstrumentNotFound(instrument.clone()))?;
         let asks = local_book.top_n_asks(depth);
         let bids = local_book.top_n_bids(depth);
         let spread = local_book.spread();
@@ -134,7 +157,7 @@ impl ExchangeState {
             bids,
             spread,
             mid,
-            status: self.status.clone()
+            status: self.status.clone(),
         })
     }
 }
@@ -148,7 +171,7 @@ pub enum ExchangeStateError {
     ChecksumError {
         instrument: Instrument,
         #[source]
-        source: ChecksumError
+        source: ChecksumError,
     },
 }
 
@@ -269,7 +292,10 @@ mod tests {
         assert_eq!(view.asks, state.top_n_asks(&inst, 2).unwrap());
         assert_eq!(view.bids, state.top_n_bids(&inst, 2).unwrap());
         assert_eq!(view.spread, Some(price(50)));
-        assert_eq!(view.mid, Some((price(10100) + price(10150)) / Price(dec!(2))));
+        assert_eq!(
+            view.mid,
+            Some((price(10100) + price(10150)) / Price(dec!(2)))
+        );
     }
 
     #[test]
@@ -364,8 +390,14 @@ mod tests {
                 })
                 .unwrap();
 
-            assert_eq!(state.top_n_asks(&inst, 25).unwrap().len(), asks_ref.len().min(25));
-            assert_eq!(state.top_n_bids(&inst, 25).unwrap().len(), bids_ref.len().min(25));
+            assert_eq!(
+                state.top_n_asks(&inst, 25).unwrap().len(),
+                asks_ref.len().min(25)
+            );
+            assert_eq!(
+                state.top_n_bids(&inst, 25).unwrap().len(),
+                bids_ref.len().min(25)
+            );
 
             let expected_asks: Vec<BookLevel> = asks_ref
                 .iter()

@@ -17,10 +17,7 @@ impl DbLoggingWriter {
         receiver: Receiver<LogEvent>,
     ) -> Result<Self, Box<dyn Error>> {
         let init = fs::read_to_string(init_path)?;
-        let session = SessionBuilder::new()
-            .known_node(uri)
-            .build()
-            .await?;
+        let session = SessionBuilder::new().known_node(uri).build().await?;
 
         for stmt in init.split(';') {
             let stmt = stmt.trim();
@@ -71,14 +68,7 @@ impl DbLoggingWriter {
                     );
 
                     let component_exchange_row = (
-                        level,
-                        component,
-                        exchange,
-                        ts,
-                        message,
-                        target,
-                        location,
-                        fields,
+                        level, component, exchange, ts, message, target, location, fields,
                     );
 
                     self.session
@@ -170,14 +160,7 @@ impl DbLoggingWriter {
                     let message = generic_log.message.unwrap_or_default();
                     let fields = generic_log.fields;
 
-                    let generic_row = (
-                        level,
-                        ts,
-                        message,
-                        target,
-                        location,
-                        fields,
-                    );
+                    let generic_row = (level, ts, message, target, location, fields);
 
                     self.session
                         .query_unpaged(

@@ -1,5 +1,9 @@
+use md_core::{
+    events::{BookEventType, ControlEvent, EngineMessage, EventEnvelope, NormalizedEvent},
+    logging::types::Component,
+    types::Exchange,
+};
 use std::collections::HashMap;
-use md_core::{events::{BookEventType, ControlEvent, EngineMessage, EventEnvelope, NormalizedEvent}, logging::types::Component, types::Exchange};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tracing::{error, warn};
 
@@ -7,78 +11,82 @@ use crate::exchange_state::{ExchangeState, ExchangeStateError};
 
 pub struct Engine {
     pub(crate) exchanges: HashMap<Exchange, ExchangeState>,
-    rx: Receiver<EngineMessage>
+    rx: Receiver<EngineMessage>,
 }
 
 impl Engine {
-    pub fn new(rx: Receiver<EngineMessage>, exchanges_controller: HashMap<Exchange, Sender<ControlEvent>>) -> Self  {
+    pub fn new(
+        rx: Receiver<EngineMessage>,
+        exchanges_controller: HashMap<Exchange, Sender<ControlEvent>>,
+    ) -> Self {
         let mut map = HashMap::new();
         for (exchange, control_tx) in exchanges_controller {
             map.insert(exchange, ExchangeState::new(exchange, control_tx));
         }
-        Self {
-            exchanges: map,
-            rx
-        }
+        Self { exchanges: map, rx }
     }
     pub fn run(&mut self) {
         while let Some(msg) = self.rx.blocking_recv() {
             match msg {
-                EngineMessage::Apply(event_enveloped)  => {
-                    let EventEnvelope { exchange, event} = event_enveloped;
+                EngineMessage::Apply(event_enveloped) => {
+                    let EventEnvelope { exchange, event } = event_enveloped;
                     let Some(exchange_state) = self.exchanges.get_mut(&exchange) else {
                         error!(exchange = ?exchange, component = ?Component::Engine, "exchange not found");
                         continue;
                     };
-        
+
                     match event {
                         NormalizedEvent::ApplyStatus(data) => {
                             exchange_state.apply_status(data);
-                        },
-                        NormalizedEvent::Book(event_type, book_data) => {
-                            match event_type {
-                                BookEventType::Snapshot => {
-                                    if let Err(e) = exchange_state.apply_snapshot(book_data) {
-                                        match e {
-                                            ExchangeStateError::InstrumentNotFound(instrument) => {
-                                                warn!(
-                                                    exchange = ?exchange,
-                                                    component = ?Component::Engine,
-                                                    instrument = ?instrument,
-                                                    "snapshot ignored: instrument not tracked yet"
-                                                );
-                                                continue;
-                                            },
-                                            ExchangeStateError::ChecksumError { instrument: _, source: _ } => {
-                                                error!(exchange = ?exchange, component = ?Component::Engine, error = ?e, "apply_snapshot checksum error, resync requested");
-                                                exchange_state.resync();
-                                            }
+                        }
+                        NormalizedEvent::Book(event_type, book_data) => match event_type {
+                            BookEventType::Snapshot => {
+                                if let Err(e) = exchange_state.apply_snapshot(book_data) {
+                                    match e {
+                                        ExchangeStateError::InstrumentNotFound(instrument) => {
+                                            warn!(
+                                                exchange = ?exchange,
+                                                component = ?Component::Engine,
+                                                instrument = ?instrument,
+                                                "snapshot ignored: instrument not tracked yet"
+                                            );
+                                            continue;
                                         }
-                                    }
-                                },
-                                BookEventType::Update => {
-                                    if let Err(e) = exchange_state.apply_update(book_data) {
-                                        match e {
-                                            ExchangeStateError::InstrumentNotFound(instrument) => {
-                                                warn!(
-                                                    exchange = ?exchange,
-                                                    component = ?Component::Engine,
-                                                    instrument = ?instrument,
-                                                    "update ignored: instrument not tracked yet"
-                                                );
-                                                continue;
-                                            },
-                                            ExchangeStateError::ChecksumError { instrument: _, source: _ } => {
-                                                error!(exchange = ?exchange, component = ?Component::Engine, error = ?e, "apply_update checksum error, resync requested");
-                                                exchange_state.resync();
-                                            }
+                                        ExchangeStateError::ChecksumError {
+                                            instrument: _,
+                                            source: _,
+                                        } => {
+                                            error!(exchange = ?exchange, component = ?Component::Engine, error = ?e, "apply_snapshot checksum error, resync requested");
+                                            exchange_state.resync();
                                         }
                                     }
                                 }
                             }
-                        }
+                            BookEventType::Update => {
+                                if let Err(e) = exchange_state.apply_update(book_data) {
+                                    match e {
+                                        ExchangeStateError::InstrumentNotFound(instrument) => {
+                                            warn!(
+                                                exchange = ?exchange,
+                                                component = ?Component::Engine,
+                                                instrument = ?instrument,
+                                                "update ignored: instrument not tracked yet"
+                                            );
+                                            continue;
+                                        }
+                                        ExchangeStateError::ChecksumError {
+                                            instrument: _,
+                                            source: _,
+                                        } => {
+                                            error!(exchange = ?exchange, component = ?Component::Engine, error = ?e, "apply_update checksum error, resync requested");
+                                            exchange_state.resync();
+                                        }
+                                    }
+                                }
+                            }
+                        },
                     }
-                },
+                }
                 EngineMessage::Query(engine_query) => {
                     self.handle_query(engine_query);
                 }
@@ -92,7 +100,10 @@ mod tests {
     use super::*;
     use md_core::{
         book::{BookLevels, LocalBook},
-        events::{BookEventType, ControlEvent, EngineMessage, EventEnvelope, NormalizedBookData, NormalizedEvent},
+        events::{
+            BookEventType, ControlEvent, EngineMessage, EventEnvelope, NormalizedBookData,
+            NormalizedEvent,
+        },
         helpers::book::compute_checksum,
         query::EngineQuery,
         types::{Instrument, Price, Qty},
@@ -240,10 +251,7 @@ mod tests {
             }))
             .unwrap();
 
-        let view = rt
-            .block_on(reply_rx)
-            .unwrap()
-            .expect("book query ok");
+        let view = rt.block_on(reply_rx).unwrap().expect("book query ok");
 
         assert_eq!(view.exchange, Exchange::Binance);
         assert_eq!(view.instrument, inst);
@@ -269,10 +277,16 @@ mod tests {
         let mut asks = Vec::new();
         let mut bids = Vec::new();
         for _ in 0..80 {
-            asks.push((price(rng.gen_range(10000..10500)), qty(rng.gen_range(1..500_000))));
+            asks.push((
+                price(rng.gen_range(10000..10500)),
+                qty(rng.gen_range(1..500_000)),
+            ));
         }
         for _ in 0..80 {
-            bids.push((price(rng.gen_range(9900..10000)), qty(rng.gen_range(1..500_000))));
+            bids.push((
+                price(rng.gen_range(9900..10000)),
+                qty(rng.gen_range(1..500_000)),
+            ));
         }
         let snap = BookLevels { asks, bids };
         ref_book.apply_snapshot(snap.clone());
@@ -312,10 +326,7 @@ mod tests {
                 };
                 bu.push((p, q));
             }
-            let upd = BookLevels {
-                asks: au,
-                bids: bu,
-            };
+            let upd = BookLevels { asks: au, bids: bu };
             ref_book.apply_update(upd.clone());
             let cs = compute_checksum(ref_book.top_n_bids(25), ref_book.top_n_asks(25));
 
@@ -343,10 +354,7 @@ mod tests {
                 }))
                 .unwrap();
 
-            let view = rt
-                .block_on(reply_rx)
-                .unwrap()
-                .expect("book query ok");
+            let view = rt.block_on(reply_rx).unwrap().expect("book query ok");
 
             assert_eq!(view.asks, ref_book.top_n_asks(25));
             assert_eq!(view.bids, ref_book.top_n_bids(25));

@@ -32,15 +32,10 @@ pub trait ExchangeConnector {
     ) -> Result<Self::SubscriptionsInfo, Box<dyn Error + Send + Sync + 'static>>;
 
     /// Create websocket connections and send subscriptions.
-    async fn subscribe_streams(
-        &mut self,
-    ) -> Result<(), Box<dyn Error + Send + Sync + 'static>>;
+    async fn subscribe_streams(&mut self) -> Result<(), Box<dyn Error + Send + Sync + 'static>>;
 
     /// Respond to a ping message.
-    async fn pong(
-        &self,
-        msg: PingMsg,
-    ) -> Result<(), Box<dyn Error + Send + Sync + 'static>>;
+    async fn pong(&self, msg: PingMsg) -> Result<(), Box<dyn Error + Send + Sync + 'static>>;
 
     /// Start the connector (setup + main loop).
     async fn start(&mut self);

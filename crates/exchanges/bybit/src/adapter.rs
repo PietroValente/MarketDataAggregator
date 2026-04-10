@@ -1,27 +1,43 @@
-use std::{collections::HashMap, error::Error, time::{SystemTime, UNIX_EPOCH}};
+use std::{
+    collections::HashMap,
+    error::Error,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
-use md_core::{book::BookLevels, events::{BookEventType, ControlEvent, EngineMessage, NormalizedBookData, NormalizedEvent}, helpers::adapter::{clear_book_state, compute_status, send_normalized_event, send_status}, traits::adapter::ExchangeAdapter, types::{Exchange, Instrument}};
+use md_core::{
+    book::BookLevels,
+    events::{BookEventType, ControlEvent, EngineMessage, NormalizedBookData, NormalizedEvent},
+    helpers::adapter::{clear_book_state, compute_status, send_normalized_event, send_status},
+    traits::adapter::ExchangeAdapter,
+    types::{Exchange, Instrument},
+};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tracing::{error, warn};
 
-use crate::types::{BookState, BybitMdMsg, DepthBookAction, ParsedBookMessage, ValidateBookError, WsMessage};
+use crate::types::{
+    BookState, BybitMdMsg, DepthBookAction, ParsedBookMessage, ValidateBookError, WsMessage,
+};
 
 pub struct BybitAdapter {
     raw_rx: Receiver<BybitMdMsg>,
     normalized_tx: Sender<EngineMessage>,
     control_tx: Sender<ControlEvent>,
     book_states: HashMap<Instrument, BookState>,
-    live_books: usize
+    live_books: usize,
 }
 
 impl BybitAdapter {
-    pub fn new(raw_rx: Receiver<BybitMdMsg>, normalized_tx: Sender<EngineMessage>, control_tx: Sender<ControlEvent>) -> Self {
+    pub fn new(
+        raw_rx: Receiver<BybitMdMsg>,
+        normalized_tx: Sender<EngineMessage>,
+        control_tx: Sender<ControlEvent>,
+    ) -> Self {
         Self {
             raw_rx,
             normalized_tx,
             control_tx,
             book_states: HashMap::new(),
-            live_books: 0
+            live_books: 0,
         }
     }
 
@@ -30,7 +46,9 @@ impl BybitAdapter {
             return Err(ValidateBookError::InvalidSnapshotAction);
         }
         let Some(book) = self.book_states.get_mut(&payload.data.symbol) else {
-            return Err(ValidateBookError::InstrumentNotFound(payload.data.symbol.clone()));
+            return Err(ValidateBookError::InstrumentNotFound(
+                payload.data.symbol.clone(),
+            ));
         };
         if !book.initialized {
             book.initialized = true;
@@ -45,7 +63,9 @@ impl BybitAdapter {
             return Err(ValidateBookError::InvalidDeltaAction);
         }
         let Some(book) = self.book_states.get_mut(&payload.data.symbol) else {
-            return Err(ValidateBookError::InstrumentNotFound(payload.data.symbol.clone()));
+            return Err(ValidateBookError::InstrumentNotFound(
+                payload.data.symbol.clone(),
+            ));
         };
 
         if let Ok(elapsed) = SystemTime::now().duration_since(UNIX_EPOCH) {
@@ -66,12 +86,13 @@ impl BybitAdapter {
         match book.last_update_id {
             Some(last_update_id) => {
                 if payload.data.update_id <= last_update_id {
-                    return Err(ValidateBookError::StaleUpdate { new_update_id: payload.data.update_id, last_update_id });
+                    return Err(ValidateBookError::StaleUpdate {
+                        new_update_id: payload.data.update_id,
+                        last_update_id,
+                    });
                 }
-            },
-            None => {
-                return Err(ValidateBookError::MissingSnapshot)
             }
+            None => return Err(ValidateBookError::MissingSnapshot),
         }
         book.last_update_id = Some(payload.data.update_id);
         Ok(())
@@ -83,79 +104,107 @@ impl BybitAdapter {
                 BybitMdMsg::ResetBookState => {
                     self.live_books = 0;
                     clear_book_state(&mut self.book_states);
-                    send_status::<BybitAdapter>(&self.normalized_tx, compute_status(self.live_books, self.book_states.len()));
-                },
+                    send_status::<BybitAdapter>(
+                        &self.normalized_tx,
+                        compute_status(self.live_books, self.book_states.len()),
+                    );
+                }
                 BybitMdMsg::Instruments(symbols) => {
                     for i in symbols.iter() {
                         self.book_states.insert(i.clone(), BookState::new());
                     }
-                    send_status::<BybitAdapter>(&self.normalized_tx, compute_status(self.live_books, self.book_states.len()));
-                },
-                BybitMdMsg::Raw(msg) => {
-                    match serde_json::from_slice::<WsMessage>(&msg) {
-                        Ok(WsMessage::Confirmation(_)) => {
-                            continue;
-                        },
-                        Err(_) => {
-                            let text = String::from_utf8_lossy(&msg);
-                            error!(exchange = ?BybitAdapter::exchange(), component = ?BybitAdapter::component(), text = ?text, "error while parsing update");
-                        },
-                        Ok(WsMessage::Depth(depth)) => {
-                            let action = depth.action.clone();
-        
-                            match action {
-                                DepthBookAction::Snapshot => {
-                                    if let Err(e) = self.validate_snapshot(&depth) {
-                                        error!(exchange = ?BybitAdapter::exchange(), component = ?BybitAdapter::component(), symbol = ?depth.data.symbol, error = ?e, "error while validating snapshot");
-                                        if let Err(e) = self.control_tx.blocking_send(ControlEvent::Resync) {
+                    send_status::<BybitAdapter>(
+                        &self.normalized_tx,
+                        compute_status(self.live_books, self.book_states.len()),
+                    );
+                }
+                BybitMdMsg::Raw(msg) => match serde_json::from_slice::<WsMessage>(&msg) {
+                    Ok(WsMessage::Confirmation(_)) => {
+                        continue;
+                    }
+                    Err(_) => {
+                        let text = String::from_utf8_lossy(&msg);
+                        error!(exchange = ?BybitAdapter::exchange(), component = ?BybitAdapter::component(), text = ?text, "error while parsing update");
+                    }
+                    Ok(WsMessage::Depth(depth)) => {
+                        let action = depth.action.clone();
+
+                        match action {
+                            DepthBookAction::Snapshot => {
+                                if let Err(e) = self.validate_snapshot(&depth) {
+                                    error!(exchange = ?BybitAdapter::exchange(), component = ?BybitAdapter::component(), symbol = ?depth.data.symbol, error = ?e, "error while validating snapshot");
+                                    if let Err(e) =
+                                        self.control_tx.blocking_send(ControlEvent::Resync)
+                                    {
+                                        error!(exchange = ?BybitAdapter::exchange(), component = ?BybitAdapter::component(), error = ?e, "error while sending resync");
+                                    }
+                                }
+                                let snapshot_event = NormalizedEvent::Book(
+                                    BookEventType::Snapshot,
+                                    NormalizedBookData {
+                                        instrument: Instrument::from(depth.data.symbol),
+                                        levels: BookLevels {
+                                            asks: depth.data.asks,
+                                            bids: depth.data.bids,
+                                        },
+                                        checksum: None,
+                                    },
+                                );
+                                send_normalized_event::<BybitAdapter>(
+                                    &self.normalized_tx,
+                                    snapshot_event,
+                                );
+                                send_status::<BybitAdapter>(
+                                    &self.normalized_tx,
+                                    compute_status(self.live_books, self.book_states.len()),
+                                );
+                            }
+                            DepthBookAction::Delta => {
+                                match self.validate_update(&depth) {
+                                    Err(
+                                        e @ ValidateBookError::StaleUpdate {
+                                            new_update_id: _,
+                                            last_update_id: _,
+                                        },
+                                    ) => {
+                                        warn!(
+                                            exchange = ?BybitAdapter::exchange(),
+                                            component = ?BybitAdapter::component(),
+                                            symbol = ?depth.data.symbol,
+                                            error = ?e,
+                                            "stale update dropped"
+                                        );
+                                        continue;
+                                    }
+                                    Err(e) => {
+                                        error!(exchange = ?BybitAdapter::exchange(), component = ?BybitAdapter::component(), symbol = ?depth.data.symbol, error = ?e, "error while validating update");
+                                        if let Err(e) =
+                                            self.control_tx.blocking_send(ControlEvent::Resync)
+                                        {
                                             error!(exchange = ?BybitAdapter::exchange(), component = ?BybitAdapter::component(), error = ?e, "error while sending resync");
                                         }
                                     }
-                                    let snapshot_event = NormalizedEvent::Book(BookEventType::Snapshot, NormalizedBookData {
-                                        instrument: Instrument::from(depth.data.symbol),
-                                        levels: BookLevels {
-                                            asks: depth.data.asks,
-                                            bids: depth.data.bids
-                                        },
-                                        checksum: None
-                                    });
-                                    send_normalized_event::<BybitAdapter>(&self.normalized_tx, snapshot_event);
-                                    send_status::<BybitAdapter>(&self.normalized_tx, compute_status(self.live_books, self.book_states.len()));
-                                },
-                                DepthBookAction::Delta => {
-                                    match self.validate_update(&depth) {
-                                        Err(e @ ValidateBookError::StaleUpdate { new_update_id: _, last_update_id: _ }) => {
-                                            warn!(
-                                                exchange = ?BybitAdapter::exchange(),
-                                                component = ?BybitAdapter::component(),
-                                                symbol = ?depth.data.symbol,
-                                                error = ?e,
-                                                "stale update dropped"
-                                            );
-                                            continue;
-                                        },
-                                        Err(e) => {
-                                            error!(exchange = ?BybitAdapter::exchange(), component = ?BybitAdapter::component(), symbol = ?depth.data.symbol, error = ?e, "error while validating update");
-                                            if let Err(e) = self.control_tx.blocking_send(ControlEvent::Resync) {
-                                                error!(exchange = ?BybitAdapter::exchange(), component = ?BybitAdapter::component(), error = ?e, "error while sending resync");
-                                            }
-                                        },
-                                        Ok(()) => {}
-                                    }
-                                    let update_event = NormalizedEvent::Book(BookEventType::Update, NormalizedBookData {
-                                        instrument: Instrument::from(depth.data.symbol),
-                                        levels: BookLevels {
-                                            asks: depth.data.asks,
-                                            bids: depth.data.bids
-                                        },
-                                        checksum: None
-                                    });
-                                    send_normalized_event::<BybitAdapter>(&self.normalized_tx, update_event);
+                                    Ok(()) => {}
                                 }
+                                let update_event = NormalizedEvent::Book(
+                                    BookEventType::Update,
+                                    NormalizedBookData {
+                                        instrument: Instrument::from(depth.data.symbol),
+                                        levels: BookLevels {
+                                            asks: depth.data.asks,
+                                            bids: depth.data.bids,
+                                        },
+                                        checksum: None,
+                                    },
+                                );
+                                send_normalized_event::<BybitAdapter>(
+                                    &self.normalized_tx,
+                                    update_event,
+                                );
                             }
                         }
-                    }        
-                }
+                    }
+                },
             }
         }
     }
@@ -169,12 +218,20 @@ impl ExchangeAdapter for BybitAdapter {
         Exchange::Bybit
     }
 
-    fn validate_snapshot(&mut self, payload: &Self::SnapshotPayload) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
-        BybitAdapter::validate_snapshot(self, payload).map_err(|e| Box::new(e) as Box<dyn Error + Send + Sync + 'static>)
+    fn validate_snapshot(
+        &mut self,
+        payload: &Self::SnapshotPayload,
+    ) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
+        BybitAdapter::validate_snapshot(self, payload)
+            .map_err(|e| Box::new(e) as Box<dyn Error + Send + Sync + 'static>)
     }
 
-    fn validate_update(&mut self, payload: &Self::UpdatePayload) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
-        BybitAdapter::validate_update(self, payload).map_err(|e| Box::new(e) as Box<dyn Error + Send + Sync + 'static>)
+    fn validate_update(
+        &mut self,
+        payload: &Self::UpdatePayload,
+    ) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
+        BybitAdapter::validate_update(self, payload)
+            .map_err(|e| Box::new(e) as Box<dyn Error + Send + Sync + 'static>)
     }
 
     fn run(&mut self) {
@@ -185,10 +242,10 @@ impl ExchangeAdapter for BybitAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::thread;
     use md_core::types::ExchangeStatus;
     use md_core::types::{Price, Qty};
     use rust_decimal::Decimal;
+    use std::thread;
     use tokio::sync::mpsc;
 
     fn instrument(v: &str) -> Instrument {
@@ -235,14 +292,20 @@ mod tests {
             .validate_snapshot(&message(DepthBookAction::Snapshot, "BTCUSDT", 10))
             .unwrap();
         assert_eq!(adapter.live_books, 1);
-        assert_eq!(adapter.book_states.get(&symbol).unwrap().last_update_id, Some(10));
+        assert_eq!(
+            adapter.book_states.get(&symbol).unwrap().last_update_id,
+            Some(10)
+        );
 
         // Repeated snapshots should not increase live_books multiple times.
         adapter
             .validate_snapshot(&message(DepthBookAction::Snapshot, "BTCUSDT", 15))
             .unwrap();
         assert_eq!(adapter.live_books, 1);
-        assert_eq!(adapter.book_states.get(&symbol).unwrap().last_update_id, Some(15));
+        assert_eq!(
+            adapter.book_states.get(&symbol).unwrap().last_update_id,
+            Some(15)
+        );
     }
 
     #[test]
@@ -251,7 +314,9 @@ mod tests {
         let (normalized_tx, _normalized_rx) = mpsc::channel(8);
         let (control_tx, _control_rx) = mpsc::channel(8);
         let mut adapter = BybitAdapter::new(raw_rx, normalized_tx, control_tx);
-        adapter.book_states.insert(instrument("BTCUSDT"), BookState::new());
+        adapter
+            .book_states
+            .insert(instrument("BTCUSDT"), BookState::new());
 
         let err = adapter
             .validate_update(&message(DepthBookAction::Delta, "BTCUSDT", 1))
@@ -290,14 +355,21 @@ mod tests {
                 (ref_last + 1 + (next_u64(&mut seed) % 3), true)
             };
 
-            let got = adapter.validate_update(&message(DepthBookAction::Delta, "BTCUSDT", update_id));
+            let got =
+                adapter.validate_update(&message(DepthBookAction::Delta, "BTCUSDT", update_id));
             if expected_ok {
                 assert!(got.is_ok(), "increasing update_id must be accepted");
                 ref_last = update_id;
-                assert_eq!(adapter.book_states.get(&symbol).unwrap().last_update_id, Some(ref_last));
+                assert_eq!(
+                    adapter.book_states.get(&symbol).unwrap().last_update_id,
+                    Some(ref_last)
+                );
             } else {
                 assert!(matches!(got, Err(ValidateBookError::StaleUpdate { .. })));
-                assert_eq!(adapter.book_states.get(&symbol).unwrap().last_update_id, Some(ref_last));
+                assert_eq!(
+                    adapter.book_states.get(&symbol).unwrap().last_update_id,
+                    Some(ref_last)
+                );
             }
         }
     }
@@ -325,14 +397,17 @@ mod tests {
         while let Ok(msg) = normalized_rx.try_recv() {
             if let EngineMessage::Apply(envelope) = msg {
                 if let NormalizedEvent::Book(BookEventType::Update, book) = envelope.event {
-                if book.instrument == instrument("BTCUSDT") {
-                    saw_update = true;
-                    break;
+                    if book.instrument == instrument("BTCUSDT") {
+                        saw_update = true;
+                        break;
+                    }
                 }
             }
-            }
         }
-        assert!(saw_update, "delta currently emits update event even on validation error");
+        assert!(
+            saw_update,
+            "delta currently emits update event even on validation error"
+        );
     }
 
     #[test]
@@ -344,7 +419,10 @@ mod tests {
 
         let handle = thread::spawn(move || adapter.run());
         raw_tx
-            .blocking_send(BybitMdMsg::Instruments(vec![instrument("BTCUSDT"), instrument("ETHUSDT")]))
+            .blocking_send(BybitMdMsg::Instruments(vec![
+                instrument("BTCUSDT"),
+                instrument("ETHUSDT"),
+            ]))
             .unwrap();
         raw_tx
             .blocking_send(raw_depth_msg("snapshot", "BTCUSDT", 10))
@@ -362,15 +440,25 @@ mod tests {
             if let EngineMessage::Apply(envelope) = msg {
                 if let NormalizedEvent::ApplyStatus(status) = envelope.event {
                     match status {
-                        ExchangeStatus::Initializing(p) if (p - 0.0).abs() < f32::EPSILON => init_zero += 1,
-                        ExchangeStatus::Initializing(p) if (p - 0.5).abs() < f32::EPSILON => init_half += 1,
+                        ExchangeStatus::Initializing(p) if (p - 0.0).abs() < f32::EPSILON => {
+                            init_zero += 1
+                        }
+                        ExchangeStatus::Initializing(p) if (p - 0.5).abs() < f32::EPSILON => {
+                            init_half += 1
+                        }
                         _ => {}
                     }
                 }
             }
         }
 
-        assert!(init_zero >= 2, "expected initializing 0.0 before and after reset");
-        assert!(init_half >= 2, "expected initializing 0.5 after snapshots on 1/2 books");
+        assert!(
+            init_zero >= 2,
+            "expected initializing 0.0 before and after reset"
+        );
+        assert!(
+            init_half >= 2,
+            "expected initializing 0.5 after snapshots on 1/2 books"
+        );
     }
 }

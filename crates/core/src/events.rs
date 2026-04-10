@@ -1,16 +1,20 @@
-use crate::{book::BookLevels, query::EngineQuery, types::{Exchange, ExchangeStatus, Instrument, RawMdMsg}};
+use crate::{
+    book::BookLevels,
+    query::EngineQuery,
+    types::{Exchange, ExchangeStatus, Instrument, RawMdMsg},
+};
 
 #[derive(Debug)]
 pub struct NormalizedBookData {
     pub instrument: Instrument,
     pub levels: BookLevels,
-    pub checksum: Option<i32>
+    pub checksum: Option<i32>,
 }
 
 #[derive(Debug)]
 pub enum BookEventType {
     Snapshot,
-    Update
+    Update,
 }
 
 pub enum EngineMessage {
@@ -21,7 +25,7 @@ pub enum EngineMessage {
 #[derive(Debug)]
 pub struct EventEnvelope {
     pub exchange: Exchange,
-    pub event: NormalizedEvent
+    pub event: NormalizedEvent,
 }
 
 #[derive(Debug)]
@@ -31,13 +35,13 @@ pub enum NormalizedEvent {
 }
 
 pub enum ControlEvent {
-    Resync
+    Resync,
 }
 
 #[derive(Debug)]
 pub struct PingMsg {
     pub ws_id: u8,
-    pub payload: Vec<u8>
+    pub payload: Vec<u8>,
 }
 
 #[derive(Debug)]
@@ -45,5 +49,5 @@ pub enum InboundEvent {
     WsMessage(RawMdMsg),
     Ping(PingMsg),
     ClearBookState,
-    ConnectionClosed
+    ConnectionClosed,
 }

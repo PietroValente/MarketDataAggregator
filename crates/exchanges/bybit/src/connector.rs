@@ -1,8 +1,20 @@
 use std::{error::Error, sync::Arc};
 
-use md_core::{connector::{tasks::{connection_manager_task, control_manager_task}, types::{ConnectorError, ManagerCommand, BACKOFF_SECS}}, events::{ControlEvent, InboundEvent, PingMsg}, helpers::connector::{fetch_json, recreate_with_snapshots, retry_with_backoff}, traits::connector::ExchangeConnector, types::{Exchange, Instrument}};
+use md_core::{
+    connector::{
+        tasks::{connection_manager_task, control_manager_task},
+        types::{BACKOFF_SECS, ConnectorError, ManagerCommand},
+    },
+    events::{ControlEvent, InboundEvent, PingMsg},
+    helpers::connector::{fetch_json, recreate_with_snapshots, retry_with_backoff},
+    traits::connector::ExchangeConnector,
+    types::{Exchange, Instrument},
+};
 use reqwest::Client;
-use tokio::{sync::mpsc::{channel, Receiver, Sender}, time::Duration};
+use tokio::{
+    sync::mpsc::{Receiver, Sender, channel},
+    time::Duration,
+};
 use tokio_tungstenite::tungstenite::Message;
 use tracing::{error, warn};
 use url::Url;
@@ -12,18 +24,29 @@ use crate::types::{ApiResponse, BybitMdMsg, BybitUrls, SubscriptionRequest, Subs
 pub struct BybitConnector {
     manager_tx: Sender<ManagerCommand>,
     raw_tx: Sender<BybitMdMsg>,
-    inbound_rx: Receiver<InboundEvent>
+    inbound_rx: Receiver<InboundEvent>,
 }
 
 impl BybitConnector {
-    pub async fn new(client: Client, urls: BybitUrls, max_subscription_per_ws: usize, raw_tx: Sender<BybitMdMsg>, control_rx: Receiver<ControlEvent>) -> Result<Self, Box<dyn Error + Send + Sync + 'static>> 
-    where 
-        Self: Sized
+    pub async fn new(
+        client: Client,
+        urls: BybitUrls,
+        max_subscription_per_ws: usize,
+        raw_tx: Sender<BybitMdMsg>,
+        control_rx: Receiver<ControlEvent>,
+    ) -> Result<Self, Box<dyn Error + Send + Sync + 'static>>
+    where
+        Self: Sized,
     {
         let (inbound_tx, inbound_rx) = channel::<InboundEvent>(4096);
         let ws_url = Arc::from(urls.ws);
 
-        let subscriptions = BybitConnector::build_subscriptions(client, &urls.exchange_info, max_subscription_per_ws).await?;
+        let subscriptions = BybitConnector::build_subscriptions(
+            client,
+            &urls.exchange_info,
+            max_subscription_per_ws,
+        )
+        .await?;
         raw_tx
             .send(BybitMdMsg::Instruments(subscriptions.symbols))
             .await?;
@@ -31,7 +54,13 @@ impl BybitConnector {
 
         let (manager_tx, manager_rx) = channel::<ManagerCommand>(128);
 
-        tokio::spawn(connection_manager_task::<BybitConnector, Vec<Message>, BybitMdMsg, _, _>(
+        tokio::spawn(connection_manager_task::<
+            BybitConnector,
+            Vec<Message>,
+            BybitMdMsg,
+            _,
+            _,
+        >(
             ws_url.clone(),
             None,
             subscriptions_payloads,
@@ -39,26 +68,31 @@ impl BybitConnector {
             None,
             manager_tx.clone(),
             manager_rx,
-            recreate_with_snapshots::<BybitConnector, BybitMdMsg>
+            recreate_with_snapshots::<BybitConnector, BybitMdMsg>,
         ));
 
         tokio::spawn(control_manager_task::<BybitConnector>(
-            control_rx, 
+            control_rx,
             manager_tx.clone(),
-            inbound_tx
+            inbound_tx,
         ));
 
         Ok(Self {
             raw_tx,
             inbound_rx,
-            manager_tx
+            manager_tx,
         })
     }
 
-    async fn get_subscriptions_list(client: Client, rest_url: &Url) -> Result<Vec<Instrument>, Box<dyn Error + Send + Sync + 'static>> {
-        let resp  = fetch_json::<ApiResponse>( &client, rest_url, None).await?;
-        
-        let list: Vec<Instrument> = resp.result.list
+    async fn get_subscriptions_list(
+        client: Client,
+        rest_url: &Url,
+    ) -> Result<Vec<Instrument>, Box<dyn Error + Send + Sync + 'static>> {
+        let resp = fetch_json::<ApiResponse>(&client, rest_url, None).await?;
+
+        let list: Vec<Instrument> = resp
+            .result
+            .list
             .into_iter()
             .filter(|s| s.status == "Trading")
             .map(|s| s.symbol)
@@ -67,7 +101,11 @@ impl BybitConnector {
         Ok(list)
     }
 
-    async fn build_subscriptions(client: Client, rest_url: &Url, max_subscription_per_ws: usize) -> Result<Subscriptions, Box<dyn Error + Send + Sync + 'static>> {
+    async fn build_subscriptions(
+        client: Client,
+        rest_url: &Url,
+        max_subscription_per_ws: usize,
+    ) -> Result<Subscriptions, Box<dyn Error + Send + Sync + 'static>> {
         if max_subscription_per_ws == 0 {
             return Err(ConnectorError::InvalidMaxSubscriptionPerWs.into());
         }
@@ -85,11 +123,12 @@ impl BybitConnector {
                     "error while building subscriptions"
                 );
             },
-        ).await;
-        
+        )
+        .await;
+
         let mut messages = Vec::new();
         let update_prefix = "orderbook.200.";
-    
+
         for chunk in symbols.chunks(max_subscription_per_ws) {
             let args: Vec<String> = chunk
                 .iter()
@@ -99,18 +138,18 @@ impl BybitConnector {
                     s
                 })
                 .collect();
-    
+
             let sub_req = SubscriptionRequest {
                 op: String::from("subscribe"),
                 args,
             };
-    
+
             let json = serde_json::to_string(&sub_req)?;
             let message = Message::text(json);
-    
+
             messages.push(message);
         }
-    
+
         Ok(Subscriptions { symbols, messages })
     }
 
@@ -140,19 +179,19 @@ impl BybitConnector {
                         error!(exchange = ?BybitConnector::exchange(), component = ?BybitConnector::component(), error = ?e, "error while sending the ClearBookState command");
                         continue;
                     }
-                },
+                }
                 InboundEvent::WsMessage(payload) => {
                     if let Err(e) = self.raw_tx.send(BybitMdMsg::Raw(payload)).await {
                         error!(exchange = ?BybitConnector::exchange(), component = ?BybitConnector::component(), error = ?e, "error while sending the ws message");
                         continue;
                     }
-                },
+                }
                 InboundEvent::Ping(ping_msg) => {
                     if let Err(e) = self.pong(ping_msg).await {
                         error!(exchange = ?BybitConnector::exchange(), component = ?BybitConnector::component(), error = ?e, "error while sending the pong command");
                         continue;
                     }
-                },
+                }
                 InboundEvent::ConnectionClosed => {
                     warn!(
                         exchange = ?BybitConnector::exchange(),
@@ -168,7 +207,6 @@ impl BybitConnector {
             }
         }
     }
-
 }
 
 impl ExchangeConnector for BybitConnector {
@@ -186,16 +224,11 @@ impl ExchangeConnector for BybitConnector {
         BybitConnector::build_subscriptions(client, rest_url, max_subscription_per_ws).await
     }
 
-    async fn subscribe_streams(
-        &mut self,
-    ) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
+    async fn subscribe_streams(&mut self) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
         BybitConnector::subscribe_streams(self).await
     }
 
-    async fn pong(
-        &self,
-        msg: PingMsg,
-    ) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
+    async fn pong(&self, msg: PingMsg) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
         BybitConnector::pong(self, msg).await
     }
 

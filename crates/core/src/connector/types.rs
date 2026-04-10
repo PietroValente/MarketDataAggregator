@@ -18,7 +18,7 @@ pub const BACKOFF_SECS: [Duration; 5] = [
 
 pub enum WriteCommand {
     Raw(Message),
-    Pong(Vec<u8>)
+    Pong(Vec<u8>),
 }
 
 pub struct ConnectionTasks {

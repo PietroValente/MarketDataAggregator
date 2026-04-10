@@ -1,11 +1,16 @@
 use std::{
-    cmp::Reverse, collections::{BTreeMap, BTreeSet}, error::Error
+    cmp::Reverse,
+    collections::{BTreeMap, BTreeSet},
+    error::Error,
 };
 
 use md_core::{
     book::BookLevel,
     logging::types::Component,
-    query::{AggregatedDepthView, BestLevelPerExchange, BookView, EngineQuery, ExchangeStatusView, SpreadView},
+    query::{
+        AggregatedDepthView, BestLevelPerExchange, BookView, EngineQuery, ExchangeStatusView,
+        SpreadView,
+    },
     types::{Exchange, ExchangeStatus, Instrument, Price, Qty},
 };
 use rust_decimal::prelude::ToPrimitive;
@@ -32,7 +37,12 @@ impl Engine {
                 }
             }
 
-            EngineQuery::Book { exchange, instrument, depth, reply_to } => {
+            EngineQuery::Book {
+                exchange,
+                instrument,
+                depth,
+                reply_to,
+            } => {
                 let result = self.query_book(exchange, instrument, depth);
 
                 if reply_to.send(result).is_err() {
@@ -45,7 +55,10 @@ impl Engine {
                 }
             }
 
-            EngineQuery::Best { instrument, reply_to } => {
+            EngineQuery::Best {
+                instrument,
+                reply_to,
+            } => {
                 let result = self.query_best(&instrument);
 
                 if reply_to.send(result).is_err() {
@@ -53,7 +66,10 @@ impl Engine {
                 }
             }
 
-            EngineQuery::Spread { instrument, reply_to } => {
+            EngineQuery::Spread {
+                instrument,
+                reply_to,
+            } => {
                 let result = self.query_spread(&instrument);
 
                 if reply_to.send(result).is_err() {
@@ -61,7 +77,11 @@ impl Engine {
                 }
             }
 
-            EngineQuery::Depth { instrument, depth, reply_to } => {
+            EngineQuery::Depth {
+                instrument,
+                depth,
+                reply_to,
+            } => {
                 let result = self.query_depth(&instrument, depth);
 
                 if reply_to.send(result).is_err() {
@@ -93,7 +113,11 @@ impl Engine {
                     );
                 }
             }
-            EngineQuery::SearchContains { query, limit, reply_to } => {
+            EngineQuery::SearchContains {
+                query,
+                limit,
+                reply_to,
+            } => {
                 let result = self.query_search_contains(&query, limit);
 
                 if reply_to.send(result).is_err() {
@@ -104,7 +128,11 @@ impl Engine {
                     );
                 }
             }
-            EngineQuery::SearchSuffix { query, limit, reply_to } => {
+            EngineQuery::SearchSuffix {
+                query,
+                limit,
+                reply_to,
+            } => {
                 let result = self.query_search_suffix(&query, limit);
 
                 if reply_to.send(result).is_err() {
@@ -115,7 +143,11 @@ impl Engine {
                     );
                 }
             }
-            EngineQuery::SearchGlob { query, limit, reply_to } => {
+            EngineQuery::SearchGlob {
+                query,
+                limit,
+                reply_to,
+            } => {
                 let result = self.query_search_glob(&query, limit);
 
                 if reply_to.send(result).is_err() {
@@ -148,7 +180,12 @@ impl Engine {
         }
     }
 
-    fn query_book(&self, exchange: Exchange, instrument: Instrument, depth: usize) -> Result<BookView, EngineError> {
+    fn query_book(
+        &self,
+        exchange: Exchange,
+        instrument: Instrument,
+        depth: usize,
+    ) -> Result<BookView, EngineError> {
         match self.exchanges.get(&exchange) {
             Some(exchange_state) => exchange_state
                 .book_view(instrument, depth)
@@ -248,7 +285,11 @@ impl Engine {
             .exchanges
             .values()
             .filter(|exchange_state| exchange_state.get_status() == ExchangeStatus::Live)
-            .filter_map(|exchange_state| exchange_state.top_n_asks(instrument, per_exchange_depth).ok())
+            .filter_map(|exchange_state| {
+                exchange_state
+                    .top_n_asks(instrument, per_exchange_depth)
+                    .ok()
+            })
             .flatten()
             .fold(BTreeMap::<Price, Qty>::new(), |mut acc, level| {
                 acc.entry(*level.px())
@@ -265,7 +306,11 @@ impl Engine {
             .exchanges
             .values()
             .filter(|exchange_state| exchange_state.get_status() == ExchangeStatus::Live)
-            .filter_map(|exchange_state| exchange_state.top_n_bids(instrument, per_exchange_depth).ok())
+            .filter_map(|exchange_state| {
+                exchange_state
+                    .top_n_bids(instrument, per_exchange_depth)
+                    .ok()
+            })
             .flatten()
             .fold(BTreeMap::<Reverse<Price>, Qty>::new(), |mut acc, level| {
                 acc.entry(Reverse(*level.px()))
@@ -304,13 +349,12 @@ impl Engine {
                 Some(exchange_state) => Ok(exchange_state.instruments()),
                 None => Err("exchange not found".into()),
             },
-            None => Ok(
-                self.exchanges
-                    .values()
-                    .flat_map(|ex| ex.instruments_iter())
-                    .cloned()
-                    .collect(),
-            ),
+            None => Ok(self
+                .exchanges
+                .values()
+                .flat_map(|ex| ex.instruments_iter())
+                .cloned()
+                .collect()),
         }
     }
 
@@ -320,10 +364,7 @@ impl Engine {
         for (&exchange, exchange_state) in &self.exchanges {
             for instrument in exchange_state.instruments_iter() {
                 if instrument.starts_with(query) {
-                    result
-                        .entry(instrument.clone())
-                        .or_default()
-                        .push(exchange);
+                    result.entry(instrument.clone()).or_default().push(exchange);
                 }
             }
         }
@@ -331,11 +372,19 @@ impl Engine {
         result
     }
 
-    fn query_search_contains(&self, query: &str, limit: usize) -> BTreeMap<Instrument, Vec<Exchange>> {
+    fn query_search_contains(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> BTreeMap<Instrument, Vec<Exchange>> {
         self.query_search_with_limit(limit, |instrument| instrument.contains(query))
     }
 
-    fn query_search_suffix(&self, query: &str, limit: usize) -> BTreeMap<Instrument, Vec<Exchange>> {
+    fn query_search_suffix(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> BTreeMap<Instrument, Vec<Exchange>> {
         self.query_search_with_limit(limit, |instrument| instrument.ends_with(query))
     }
 
@@ -343,7 +392,11 @@ impl Engine {
         self.query_search_with_limit(limit, |instrument| Self::glob_match_star(instrument, query))
     }
 
-    fn query_search_with_limit<F>(&self, limit: usize, mut predicate: F) -> BTreeMap<Instrument, Vec<Exchange>>
+    fn query_search_with_limit<F>(
+        &self,
+        limit: usize,
+        mut predicate: F,
+    ) -> BTreeMap<Instrument, Vec<Exchange>>
     where
         F: FnMut(&str) -> bool,
     {

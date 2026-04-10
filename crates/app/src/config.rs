@@ -9,13 +9,13 @@ pub struct AppConfig {
     pub bitget: BitgetConfig,
     pub bybit: BybitConfig,
     pub coinbase: CoinbaseConfig,
-    pub okx: OkxConfig
+    pub okx: OkxConfig,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct ScyllaDb {
     pub uri: String,
-    pub init_path: String
+    pub init_path: String,
 }
 
 #[derive(Debug, Deserialize)]

@@ -1,7 +1,23 @@
-use std::{cmp::max, io::{self, Write}, time::{Duration, Instant}};
+use std::{
+    cmp::max,
+    io::{self, Write},
+    time::{Duration, Instant},
+};
 
-use crossterm::{cursor::MoveTo, event::{self, Event, KeyCode, KeyEventKind}, execute, terminal::{disable_raw_mode, enable_raw_mode, Clear, ClearType}};
-use md_core::{events::EngineMessage, query::{AggregatedDepthView, BestLevelPerExchange, BookView, EngineQuery, ExchangeStatusView, SpreadView}, types::{Exchange, Instrument}};
+use crossterm::{
+    cursor::MoveTo,
+    event::{self, Event, KeyCode, KeyEventKind},
+    execute,
+    terminal::{Clear, ClearType, disable_raw_mode, enable_raw_mode},
+};
+use md_core::{
+    events::EngineMessage,
+    query::{
+        AggregatedDepthView, BestLevelPerExchange, BookView, EngineQuery, ExchangeStatusView,
+        SpreadView,
+    },
+    types::{Exchange, Instrument},
+};
 use rust_decimal::{Decimal, prelude::ToPrimitive};
 use tokio::sync::{mpsc::Sender, oneshot};
 
@@ -92,7 +108,7 @@ impl QueryManager {
 
                     let status_event = EngineMessage::Query(EngineQuery::ExchangeStatus {
                         exchange,
-                        reply_to: status_tx
+                        reply_to: status_tx,
                     });
 
                     if let Err(e) = self.normalized_tx.blocking_send(status_event) {
@@ -101,15 +117,13 @@ impl QueryManager {
                     }
 
                     match status_rx.blocking_recv() {
-                        Ok(msg) => {
-                            match msg {
-                                Ok(status) => {
-                                    println!("Exchange status");
-                                    println!("  {} -> {}", exchange, status);
-                                },
-                                Err(e) => {
-                                    println!("error: {}", e);
-                                }
+                        Ok(msg) => match msg {
+                            Ok(status) => {
+                                println!("Exchange status");
+                                println!("  {} -> {}", exchange, status);
+                            }
+                            Err(e) => {
+                                println!("error: {}", e);
                             }
                         },
                         Err(e) => {
@@ -136,9 +150,9 @@ impl QueryManager {
 
                     let (list_tx, list_rx) = oneshot::channel();
 
-                    let list_event = EngineMessage::Query(EngineQuery::List { 
-                        exchange, 
-                        reply_to: list_tx
+                    let list_event = EngineMessage::Query(EngineQuery::List {
+                        exchange,
+                        reply_to: list_tx,
                     });
 
                     if let Err(e) = self.normalized_tx.blocking_send(list_event) {
@@ -147,16 +161,15 @@ impl QueryManager {
                     }
 
                     match list_rx.blocking_recv() {
-                        Ok(msg) => {
-                            match msg {
-                                Ok(list) => {
-                                    let instruments: Vec<String> = list.into_iter().map(|i| i.to_string()).collect();
-                                    println!("Instruments ({}):", instruments.len());
-                                    self.render_columns(&instruments, 4);
-                                },
-                                Err(e) => {
-                                    println!("error: {}", e);
-                                }
+                        Ok(msg) => match msg {
+                            Ok(list) => {
+                                let instruments: Vec<String> =
+                                    list.into_iter().map(|i| i.to_string()).collect();
+                                println!("Instruments ({}):", instruments.len());
+                                self.render_columns(&instruments, 4);
+                            }
+                            Err(e) => {
+                                println!("error: {}", e);
                             }
                         },
                         Err(e) => {
@@ -174,7 +187,7 @@ impl QueryManager {
                     if let Err(e) = self.run_best_watch(instrument) {
                         eprintln!("{e}");
                     }
-                },
+                }
                 "spread" => {
                     let Some(instrument) = line.next() else {
                         eprintln!("Error: missing instrument");
@@ -244,7 +257,10 @@ impl QueryManager {
 
     fn print_menu(&self) {
         let rows = [
-            ("book <exchange> <instrument> <depth>", "Live order book (asks above, bids below, mid center)"),
+            (
+                "book <exchange> <instrument> <depth>",
+                "Live order book (asks above, bids below, mid center)",
+            ),
             ("best <instrument>", "Live best bid/ask per exchange"),
             ("spread <instrument>", "Live cross-exchange spread"),
             ("depth <instrument> <depth>", "Live aggregated depth"),
@@ -252,9 +268,18 @@ impl QueryManager {
             ("status --all", "Exchange statuses (live)"),
             ("list [exchange]", "Instruments list (one-shot)"),
             ("search <pattern>", "Prefix search (one-shot)"),
-            ("search --contains <text> [--limit N]", "Substring search (one-shot)"),
-            ("search --suffix <text> [--limit N]", "Suffix search (one-shot)"),
-            ("search --glob <pattern> [--limit N]", "Glob search using `*` (one-shot)"),
+            (
+                "search --contains <text> [--limit N]",
+                "Substring search (one-shot)",
+            ),
+            (
+                "search --suffix <text> [--limit N]",
+                "Suffix search (one-shot)",
+            ),
+            (
+                "search --glob <pattern> [--limit N]",
+                "Glob search using `*` (one-shot)",
+            ),
             ("exchanges", "Print available exchanges"),
             ("clear", "Clear screen"),
             ("exit", "Exit"),
@@ -327,7 +352,11 @@ impl QueryManager {
         )
     }
 
-    fn run_live_mode<T, Req, Render>(&self, mut request: Req, mut render: Render) -> Result<(), String>
+    fn run_live_mode<T, Req, Render>(
+        &self,
+        mut request: Req,
+        mut render: Render,
+    ) -> Result<(), String>
     where
         Req: FnMut() -> Result<T, String>,
         Render: FnMut(Option<&T>, Option<&str>),
@@ -383,7 +412,12 @@ impl QueryManager {
         Ok(())
     }
 
-    fn run_book_watch(&self, exchange: Exchange, instrument: Instrument, depth: usize) -> Result<(), String> {
+    fn run_book_watch(
+        &self,
+        exchange: Exchange,
+        instrument: Instrument,
+        depth: usize,
+    ) -> Result<(), String> {
         let tx = self.normalized_tx.clone();
         let instrument_clone = instrument.clone();
         self.run_live_mode(
@@ -625,10 +659,20 @@ impl QueryManager {
             return;
         }
 
-        let instrument_w = results.keys().map(|k| k.to_string().len()).max().unwrap_or(10);
+        let instrument_w = results
+            .keys()
+            .map(|k| k.to_string().len())
+            .max()
+            .unwrap_or(10);
         let exchanges_w = results
             .values()
-            .map(|v| v.iter().map(|e| e.to_string()).collect::<Vec<_>>().join(", ").len())
+            .map(|v| {
+                v.iter()
+                    .map(|e| e.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+                    .len()
+            })
             .max()
             .unwrap_or(10);
 
@@ -678,10 +722,7 @@ impl QueryManager {
     fn render_book_view(&self, data: Option<&BookView>, status: Option<&str>) {
         if let Some(view) = data {
             println!("Book: {} {}", view.exchange, view.instrument);
-            println!(
-                "Exchange status: {}",
-                view.status,
-            );
+            println!("Exchange status: {}", view.status,);
         } else {
             println!("Book: waiting for data...");
         }
@@ -760,11 +801,19 @@ impl QueryManager {
 
         let exchange_w = max(
             "EXCHANGE".len(),
-            levels.iter().map(|l| l.exchange.to_string().len()).max().unwrap_or(8),
+            levels
+                .iter()
+                .map(|l| l.exchange.to_string().len())
+                .max()
+                .unwrap_or(8),
         );
         let status_w = max(
             "STATUS".len(),
-            levels.iter().map(|l| l.status.to_string().len()).max().unwrap_or(10),
+            levels
+                .iter()
+                .map(|l| l.status.to_string().len())
+                .max()
+                .unwrap_or(10),
         );
         let cell_w = max(
             "BEST_BID".len(),
@@ -1076,15 +1125,27 @@ impl QueryManager {
 
         let exchange_w = max(
             "EXCHANGE".len(),
-            levels.iter().map(|l| l.exchange.to_string().len()).max().unwrap_or(8),
+            levels
+                .iter()
+                .map(|l| l.exchange.to_string().len())
+                .max()
+                .unwrap_or(8),
         );
         let status_w = max(
             "STATUS".len(),
-            levels.iter().map(|l| l.status.to_string().len()).max().unwrap_or(10),
+            levels
+                .iter()
+                .map(|l| l.status.to_string().len())
+                .max()
+                .unwrap_or(10),
         );
         let inst_w = max(
             "INSTR".len(),
-            levels.iter().map(|l| l.instruments.to_string().len()).max().unwrap_or(9),
+            levels
+                .iter()
+                .map(|l| l.instruments.to_string().len())
+                .max()
+                .unwrap_or(9),
         );
 
         let sep = format!(
@@ -1164,35 +1225,49 @@ impl QueryManager {
 
                 let (book_tx, book_rx) = oneshot::channel();
 
-                let book = EngineMessage::Query(EngineQuery::Book { 
-                    exchange, 
-                    instrument: Instrument::from(instrument.clone()), 
-                    depth, 
-                    reply_to: book_tx
+                let book = EngineMessage::Query(EngineQuery::Book {
+                    exchange,
+                    instrument: Instrument::from(instrument.clone()),
+                    depth,
+                    reply_to: book_tx,
                 });
 
                 if let Err(e) = self.normalized_tx.blocking_send(book) {
                     last_status = Some(format!("Error while sending the book request: {}", e));
-                    self.render_top_mode(&instrument, &last_asks, &last_bids, last_status.as_deref());
+                    self.render_top_mode(
+                        &instrument,
+                        &last_asks,
+                        &last_bids,
+                        last_status.as_deref(),
+                    );
                     last_refresh = Instant::now();
                     continue;
                 }
 
                 let book = match book_rx.blocking_recv() {
-                    Ok(msg) => {
-                        match msg {
-                            Err(e) => {
-                                last_status = Some(format!("Error while receiving the book data: {}", e));
-                                self.render_top_mode(&instrument, &last_asks, &last_bids, last_status.as_deref());
-                                last_refresh = Instant::now();
-                                continue;
-                            }
-                            Ok(msg) => msg
+                    Ok(msg) => match msg {
+                        Err(e) => {
+                            last_status =
+                                Some(format!("Error while receiving the book data: {}", e));
+                            self.render_top_mode(
+                                &instrument,
+                                &last_asks,
+                                &last_bids,
+                                last_status.as_deref(),
+                            );
+                            last_refresh = Instant::now();
+                            continue;
                         }
+                        Ok(msg) => msg,
                     },
                     Err(e) => {
                         last_status = Some(format!("Error while receiving the book data: {}", e));
-                        self.render_top_mode(&instrument, &last_asks, &last_bids, last_status.as_deref());
+                        self.render_top_mode(
+                            &instrument,
+                            &last_asks,
+                            &last_bids,
+                            last_status.as_deref(),
+                        );
                         last_refresh = Instant::now();
                         continue;
                     }
@@ -1218,7 +1293,7 @@ impl QueryManager {
 
         result
     }
-    
+
     fn render_top_mode(
         &self,
         instrument: &str,

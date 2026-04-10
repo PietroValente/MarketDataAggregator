@@ -6,7 +6,7 @@ use tracing::field::{Field, Visit};
 #[derive(Debug)]
 pub struct Location {
     pub file: &'static str,
-    pub line: u32
+    pub line: u32,
 }
 
 #[derive(Debug)]
@@ -23,20 +23,20 @@ pub struct LogGeneric {
 pub struct LogComponentExchange {
     pub component: String,
     pub exchange: String,
-    pub generic: LogGeneric
+    pub generic: LogGeneric,
 }
 
 #[derive(Debug)]
 pub struct LogInstrument {
     pub instrument: String,
-    pub component_exchange: LogComponentExchange
+    pub component_exchange: LogComponentExchange,
 }
 
 #[derive(Debug)]
 pub enum LogEvent {
     Generic(LogGeneric),
     ComponentExchange(LogComponentExchange),
-    Instrument(LogInstrument)
+    Instrument(LogInstrument),
 }
 
 #[derive(Debug)]
@@ -44,7 +44,7 @@ pub enum Component {
     Connector,
     Adapter,
     Engine,
-    ExchangeState
+    ExchangeState,
 }
 
 #[derive(Debug, Default)]
@@ -103,11 +103,7 @@ impl Visit for LogVisitor {
         self.insert_field(field, value.to_string());
     }
 
-    fn record_error(
-        &mut self,
-        field: &Field,
-        value: &(dyn std::error::Error + 'static),
-    ) {
+    fn record_error(&mut self, field: &Field, value: &(dyn std::error::Error + 'static)) {
         self.insert_field(field, value.to_string());
     }
 }

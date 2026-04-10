@@ -4,12 +4,22 @@ use bytes::BytesMut;
 use futures_util::StreamExt;
 use reqwest::Client;
 use serde::de::DeserializeOwned;
-use tokio::{sync::mpsc::{channel, Sender}, time::sleep};
+use tokio::{
+    sync::mpsc::{Sender, channel},
+    time::sleep,
+};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::error;
 use url::Url;
 
-use crate::{connector::{tasks::{reader_task, writer_task}, types::{ConnectionTasks, ConnectorError, ManagerCommand, WriteCommand}}, events::{InboundEvent, PingMsg}, traits::connector::ExchangeConnector};
+use crate::{
+    connector::{
+        tasks::{reader_task, writer_task},
+        types::{ConnectionTasks, ConnectorError, ManagerCommand, WriteCommand},
+    },
+    events::{InboundEvent, PingMsg},
+    traits::connector::ExchangeConnector,
+};
 
 pub fn ws_id_capacity() -> usize {
     usize::from(u8::MAX) + 1
@@ -19,7 +29,11 @@ pub fn ws_id_from_index(index: usize) -> Option<u8> {
     u8::try_from(index).ok()
 }
 
-pub async fn fetch_json<T>( client: &Client, url: &Url, timeout: Option<Duration> ) -> Result<T, Box<dyn Error + Send + Sync + 'static>>
+pub async fn fetch_json<T>(
+    client: &Client,
+    url: &Url,
+    timeout: Option<Duration>,
+) -> Result<T, Box<dyn Error + Send + Sync + 'static>>
 where
     T: DeserializeOwned,
 {
@@ -29,10 +43,7 @@ where
         req = req.timeout(t);
     }
 
-    let resp = req
-        .send()
-        .await?
-        .error_for_status()?;
+    let resp = req.send().await?.error_for_status()?;
 
     let mut stream = resp.bytes_stream();
     let mut body = BytesMut::new();
@@ -46,7 +57,11 @@ where
     Ok(parsed)
 }
 
-pub async fn retry_with_backoff<T, E, F, Fut, OnError>( backoff_delays: &[Duration], mut op: F, mut on_error: OnError ) -> T
+pub async fn retry_with_backoff<T, E, F, Fut, OnError>(
+    backoff_delays: &[Duration],
+    mut op: F,
+    mut on_error: OnError,
+) -> T
 where
     F: FnMut() -> Fut,
     Fut: Future<Output = Result<T, E>>,
@@ -80,16 +95,12 @@ pub fn abort_all_connections(connections: &mut HashMap<u8, ConnectionTasks>) {
     }
 }
 
-pub async fn pong_ws<T>(connections: &HashMap<u8, ConnectionTasks>, msg: PingMsg) 
+pub async fn pong_ws<T>(connections: &HashMap<u8, ConnectionTasks>, msg: PingMsg)
 where
-    T: ExchangeConnector
+    T: ExchangeConnector,
 {
     if let Some(conn) = connections.get(&msg.ws_id) {
-        if let Err(e) = conn
-            .writer_tx
-            .send(WriteCommand::Pong(msg.payload))
-            .await
-        {
+        if let Err(e) = conn.writer_tx.send(WriteCommand::Pong(msg.payload)).await {
             error!(exchange = ?T::exchange(), component = ?T::component(), error = ?e, "error while sending the pong command");
         }
     } else {
@@ -108,7 +119,7 @@ pub async fn recreate_with_snapshots<T, Raw>(
 ) -> Result<(), Box<dyn Error + Send + Sync + 'static>>
 where
     T: ExchangeConnector,
-    Raw: Send + 'static
+    Raw: Send + 'static,
 {
     if subscriptions_payloads.len() > ws_id_capacity() {
         return Err(ConnectorError::TooManyWsBatchesForU8Id {
@@ -142,14 +153,17 @@ where
             writer_task(reader_url, write, writer_rx).await;
         });
 
-        cmd_tx.send( ManagerCommand::InsertSubscription(ws_id, ConnectionTasks {
-            reader_handle,
-            writer_handle,
-            writer_tx: writer_tx.clone(),
-        })).await?;
-        writer_tx
-            .send(WriteCommand::Raw(message.clone()))
+        cmd_tx
+            .send(ManagerCommand::InsertSubscription(
+                ws_id,
+                ConnectionTasks {
+                    reader_handle,
+                    writer_handle,
+                    writer_tx: writer_tx.clone(),
+                },
+            ))
             .await?;
+        writer_tx.send(WriteCommand::Raw(message.clone())).await?;
     }
     Ok(())
 }

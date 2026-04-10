@@ -1,11 +1,11 @@
 use scylla::value::CqlTimeuuid;
 use tokio::sync::mpsc::Sender;
 use tracing::{Event, Level, Subscriber};
-use tracing_subscriber::{layer::Context, Layer};
+use tracing_subscriber::{Layer, layer::Context};
 use uuid::Uuid;
 
 use super::types::{
-    Location, LogComponentExchange, LogEvent, LogGeneric, LogInstrument, LogVisitor
+    Location, LogComponentExchange, LogEvent, LogGeneric, LogInstrument, LogVisitor,
 };
 
 pub struct DbLoggingLayer {
@@ -37,7 +37,7 @@ where
             _ => None,
         };
 
-        let ts = CqlTimeuuid::from(Uuid::now_v1(&[1,2,3,4,5,6]));
+        let ts = CqlTimeuuid::from(Uuid::now_v1(&[1, 2, 3, 4, 5, 6]));
 
         let generic = LogGeneric {
             level: *metadata.level(),

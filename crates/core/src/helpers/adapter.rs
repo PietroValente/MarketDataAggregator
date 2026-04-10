@@ -3,9 +3,13 @@ use std::collections::HashMap;
 use tokio::sync::mpsc::Sender;
 use tracing::error;
 
-use crate::{events::{EngineMessage, EventEnvelope, NormalizedEvent}, traits::adapter::ExchangeAdapter, types::{ExchangeStatus, Instrument}};
+use crate::{
+    events::{EngineMessage, EventEnvelope, NormalizedEvent},
+    traits::adapter::ExchangeAdapter,
+    types::{ExchangeStatus, Instrument},
+};
 
-pub fn clear_book_state<T>(book_states: &mut HashMap<Instrument, T>) 
+pub fn clear_book_state<T>(book_states: &mut HashMap<Instrument, T>)
 where
     T: Default,
 {
@@ -16,7 +20,7 @@ where
 
 pub fn send_normalized_event<T>(normalized_tx: &Sender<EngineMessage>, event: NormalizedEvent)
 where
-    T: ExchangeAdapter
+    T: ExchangeAdapter,
 {
     let event_envelope = EventEnvelope {
         exchange: T::exchange(),
@@ -33,9 +37,9 @@ where
     }
 }
 
-pub fn send_status<T>(normalized_tx: &Sender<EngineMessage>, status: ExchangeStatus) 
+pub fn send_status<T>(normalized_tx: &Sender<EngineMessage>, status: ExchangeStatus)
 where
-    T: ExchangeAdapter
+    T: ExchangeAdapter,
 {
     send_normalized_event::<T>(normalized_tx, NormalizedEvent::ApplyStatus(status));
 }

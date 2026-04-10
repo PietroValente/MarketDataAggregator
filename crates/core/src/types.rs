@@ -1,6 +1,9 @@
-use std::{fmt, ops::{Add, Deref, DerefMut, Div, Mul, Sub}};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
+use std::{
+    fmt,
+    ops::{Add, Deref, DerefMut, Div, Mul, Sub},
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Price(pub Decimal);
@@ -129,7 +132,7 @@ pub enum Exchange {
     Bitget,
     Bybit,
     Coinbase,
-    Okx
+    Okx,
 }
 
 impl fmt::Display for Exchange {
@@ -140,7 +143,7 @@ impl fmt::Display for Exchange {
             Exchange::Bitget => write!(f, "Bitget"),
             Exchange::Bybit => write!(f, "Bybit"),
             Exchange::Coinbase => write!(f, "Coinbase"),
-            Exchange::Okx => write!(f, "OKX")
+            Exchange::Okx => write!(f, "OKX"),
         }
     }
 }
@@ -153,7 +156,7 @@ impl From<&str> for Exchange {
             "bybit" => Exchange::Bybit,
             "coinbase" => Exchange::Coinbase,
             "okx" => Exchange::Okx,
-            _ => Exchange::Unknown
+            _ => Exchange::Unknown,
         }
     }
 }
@@ -161,14 +164,16 @@ impl From<&str> for Exchange {
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExchangeStatus {
     Initializing(f32),
-    Live
+    Live,
 }
 
 impl fmt::Display for ExchangeStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ExchangeStatus::Initializing(percentage) => write!(f, "Initializing: {:.2}%", percentage*100.0),
-            ExchangeStatus::Live => write!(f, "Live")
+            ExchangeStatus::Initializing(percentage) => {
+                write!(f, "Initializing: {:.2}%", percentage * 100.0)
+            }
+            ExchangeStatus::Live => write!(f, "Live"),
         }
     }
 }

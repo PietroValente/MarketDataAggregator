@@ -1,8 +1,16 @@
 use std::{error::Error, sync::Arc};
 
-use futures_util::{stream, StreamExt, TryStreamExt};
-use md_core::{connector::{tasks::{reader_task, writer_task}, types::{ConnectionTasks, ConnectorError, ManagerCommand, WriteCommand}}, events::InboundEvent, helpers::connector::{ws_id_capacity, ws_id_from_index}, types::RawMdMsg};
-use tokio::sync::mpsc::{channel, Sender};
+use futures_util::{StreamExt, TryStreamExt, stream};
+use md_core::{
+    connector::{
+        tasks::{reader_task, writer_task},
+        types::{ConnectionTasks, ConnectorError, ManagerCommand, WriteCommand},
+    },
+    events::InboundEvent,
+    helpers::connector::{ws_id_capacity, ws_id_from_index},
+    types::RawMdMsg,
+};
+use tokio::sync::mpsc::{Sender, channel};
 use tokio_tungstenite::connect_async;
 use url::Url;
 
@@ -14,13 +22,13 @@ pub async fn recreate_with_snapshots(
     subscriptions_payloads: Arc<Vec<SubscriptionBatch>>,
     inbound_tx: Sender<InboundEvent>,
     raw_tx: Option<Sender<BinanceMdMsg>>,
-    cmd_tx: Sender<ManagerCommand>
+    cmd_tx: Sender<ManagerCommand>,
 ) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
     let batches_payloads = subscriptions_payloads;
 
     //the template function need to call this version of recreate_with_snapshots for binance, where snapshot_url and raw_tx are Some
     let (snapshot_url, raw_tx) = (snapshot_url.unwrap(), raw_tx.unwrap());
-    
+
     if batches_payloads.len() > ws_id_capacity() {
         return Err(ConnectorError::TooManyWsBatchesForU8Id {
             batches: batches_payloads.len(),
@@ -53,11 +61,16 @@ pub async fn recreate_with_snapshots(
             writer_task(reader_url, write, writer_rx).await;
         });
 
-        cmd_tx.send( ManagerCommand::InsertSubscription(ws_id, ConnectionTasks {
-            reader_handle,
-            writer_handle,
-            writer_tx: writer_tx.clone(),
-        })).await?;
+        cmd_tx
+            .send(ManagerCommand::InsertSubscription(
+                ws_id,
+                ConnectionTasks {
+                    reader_handle,
+                    writer_handle,
+                    writer_tx: writer_tx.clone(),
+                },
+            ))
+            .await?;
 
         writer_tx
             .send(WriteCommand::Raw(batch.message.clone()))

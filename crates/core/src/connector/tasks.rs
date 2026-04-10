@@ -1,16 +1,26 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
-use futures_util::{stream::{SplitSink, SplitStream}, SinkExt, StreamExt};
-use tokio::{net::TcpStream, sync::mpsc::{Receiver, Sender}};
-use tokio_tungstenite::{tungstenite::Message, MaybeTlsStream, WebSocketStream};
+use futures_util::{
+    SinkExt, StreamExt,
+    stream::{SplitSink, SplitStream},
+};
+use tokio::{
+    net::TcpStream,
+    sync::mpsc::{Receiver, Sender},
+};
+use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, tungstenite::Message};
 use tracing::{error, warn};
 use url::Url;
 
-use crate::{events::{ControlEvent, InboundEvent, PingMsg}, helpers::connector::{abort_all_connections, pong_ws, retry_with_backoff}, traits::connector::ExchangeConnector};
-use crate::types::RawMdMsg;
 use crate::connector::types::WriteCommand;
+use crate::types::RawMdMsg;
+use crate::{
+    events::{ControlEvent, InboundEvent, PingMsg},
+    helpers::connector::{abort_all_connections, pong_ws, retry_with_backoff},
+    traits::connector::ExchangeConnector,
+};
 
-use super::types::{ConnectionTasks, ManagerCommand, BACKOFF_SECS};
+use super::types::{BACKOFF_SECS, ConnectionTasks, ManagerCommand};
 
 /* COMMON CONNECTOR TASKS (shared runtime building blocks) */
 
@@ -26,42 +36,43 @@ pub async fn reader_task(
 ) {
     while let Some(msg) = stream.next().await {
         match msg {
-            Ok(msg) => {
-                match msg {
-                    Message::Binary(payload) => {
-                        if let Err(e) = unified_tx.send(InboundEvent::WsMessage(RawMdMsg(payload))).await {
-                            error!(url = ?ws_url, error = ?e, "unified transmitter error");
-                            break;
-                        }
-                    },
-                    Message::Text(text) => {
-                        let payload = text.into_bytes();
-                        if let Err(e) = unified_tx.send(InboundEvent::WsMessage(RawMdMsg(payload))).await {
-                            error!(url = ?ws_url, error = ?e, "unified transmitter error");
-                            break;
-                        }
-                    },
-                    Message::Ping(payload) => {
-                        let ping_msg = PingMsg {
-                            ws_id,
-                            payload
-                        };
-                        if let Err(e) = unified_tx.send(InboundEvent::Ping(ping_msg)).await {
-                            error!(url = ?ws_url, error = ?e, "unified transmitter error");
-                            break;
-                        }
-                    },
-                    Message::Close(_) => {
-                        if let Err(e) = unified_tx.send(InboundEvent::ConnectionClosed).await {
-                            error!(url = ?ws_url, error = ?e, "unified transmitter error");
-                            break;
-                        }
-                    }
-                    other => {
-                        warn!(url= ?ws_url, message = ?other, "reader message not process");
+            Ok(msg) => match msg {
+                Message::Binary(payload) => {
+                    if let Err(e) = unified_tx
+                        .send(InboundEvent::WsMessage(RawMdMsg(payload)))
+                        .await
+                    {
+                        error!(url = ?ws_url, error = ?e, "unified transmitter error");
+                        break;
                     }
                 }
-            }
+                Message::Text(text) => {
+                    let payload = text.into_bytes();
+                    if let Err(e) = unified_tx
+                        .send(InboundEvent::WsMessage(RawMdMsg(payload)))
+                        .await
+                    {
+                        error!(url = ?ws_url, error = ?e, "unified transmitter error");
+                        break;
+                    }
+                }
+                Message::Ping(payload) => {
+                    let ping_msg = PingMsg { ws_id, payload };
+                    if let Err(e) = unified_tx.send(InboundEvent::Ping(ping_msg)).await {
+                        error!(url = ?ws_url, error = ?e, "unified transmitter error");
+                        break;
+                    }
+                }
+                Message::Close(_) => {
+                    if let Err(e) = unified_tx.send(InboundEvent::ConnectionClosed).await {
+                        error!(url = ?ws_url, error = ?e, "unified transmitter error");
+                        break;
+                    }
+                }
+                other => {
+                    warn!(url= ?ws_url, message = ?other, "reader message not process");
+                }
+            },
             Err(e) => {
                 error!(url = ?ws_url, error = ?e, "stream error");
                 if let Err(e) = unified_tx.send(InboundEvent::ConnectionClosed).await {
@@ -86,7 +97,7 @@ pub async fn writer_task(
     while let Some(cmd) = rx.recv().await {
         let result = match cmd {
             WriteCommand::Pong(payload) => sink.send(Message::Pong(payload)).await,
-            WriteCommand::Raw(msg) => sink.send(msg).await
+            WriteCommand::Raw(msg) => sink.send(msg).await,
         };
 
         if let Err(e) = result {
@@ -101,23 +112,20 @@ pub async fn writer_task(
 /// Listens for high-level control signals (e.g. resync requests) coming from
 /// connectors and translates them into `ManagerCommand`s for the manager loop.
 /// This acts as a lightweight bridge between runtime events and orchestration logic.
-pub async fn control_manager_task<T>(mut control_rx: Receiver<ControlEvent>, manager_tx: Sender<ManagerCommand>, inbound_tx: Sender<InboundEvent>)
-where
-    T: ExchangeConnector
+pub async fn control_manager_task<T>(
+    mut control_rx: Receiver<ControlEvent>,
+    manager_tx: Sender<ManagerCommand>,
+    inbound_tx: Sender<InboundEvent>,
+) where
+    T: ExchangeConnector,
 {
     while let Some(event) = control_rx.recv().await {
         match event {
             ControlEvent::Resync => {
-                if let Err(e) = inbound_tx
-                    .send(InboundEvent::ClearBookState)
-                    .await
-                {
+                if let Err(e) = inbound_tx.send(InboundEvent::ClearBookState).await {
                     error!(exchange = ?T::exchange(), component = ?T::component(), error = ?e, "failed to send ClearBookState");
                 }
-                if let Err(e) = manager_tx
-                    .send(ManagerCommand::RecreateWithSnapshots)
-                    .await
-                {
+                if let Err(e) = manager_tx.send(ManagerCommand::RecreateWithSnapshots).await {
                     error!(exchange = ?T::exchange(), component = ?T::component(), error = ?e, "failed to send RecreateWithSnapshots command to manager");
                 }
             }
@@ -186,13 +194,13 @@ pub async fn connection_manager_task<T, S, Raw, Recreate, Fut>(
                     );
                     continue;
                 }
-            
+
                 recreate_in_progress = true;
                 abort_all_connections(&mut connections);
-            
+
                 let recreate_fn = recreate.clone();
                 let cmd_tx_done = cmd_tx.clone();
-            
+
                 let recreate_op = {
                     let ws_url = ws_url.clone();
                     let snapshot_url = snapshot_url.clone();
@@ -200,7 +208,7 @@ pub async fn connection_manager_task<T, S, Raw, Recreate, Fut>(
                     let inbound_tx = inbound_tx.clone();
                     let raw_tx = raw_tx.clone();
                     let cmd_tx = cmd_tx.clone();
-            
+
                     move || {
                         recreate_fn(
                             ws_url.clone(),
@@ -212,7 +220,7 @@ pub async fn connection_manager_task<T, S, Raw, Recreate, Fut>(
                         )
                     }
                 };
-            
+
                 tokio::spawn(async move {
                     retry_with_backoff(
                         &BACKOFF_SECS,
@@ -229,7 +237,7 @@ pub async fn connection_manager_task<T, S, Raw, Recreate, Fut>(
                         },
                     )
                     .await;
-            
+
                     if let Err(e) = cmd_tx_done.send(ManagerCommand::RecreateFinished).await {
                         error!(
                             exchange = ?T::exchange(),

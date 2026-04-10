@@ -13,7 +13,7 @@ pub enum BinanceMdMsg {
     Instruments(Vec<Instrument>),
     Snapshot(SnapshotMsg),
     WsMessage(RawMdMsg),
-    ResetBookState
+    ResetBookState,
 }
 
 pub struct SnapshotMsg {
@@ -71,7 +71,7 @@ pub struct DepthQuery<'a> {
 pub enum BookSyncStatus {
     #[default]
     WaitingSnapshot,
-    Live
+    Live,
 }
 
 #[derive(Default)]
@@ -157,19 +157,25 @@ pub enum ValidateBookError {
     #[error("Unknown type of event: {0}")]
     UnknownType(String),
 
-    #[error("Stale update: event last_update_id={event_last_update_id} <= book last_applied_update_id={book_last_update_id}")]
+    #[error(
+        "Stale update: event last_update_id={event_last_update_id} <= book last_applied_update_id={book_last_update_id}"
+    )]
     StaleUpdate {
         event_last_update_id: u64,
         book_last_update_id: u64,
     },
 
-    #[error("Update gap detected: event first_update_id={event_first_update_id} > expected={expected_next_update_id}")]
+    #[error(
+        "Update gap detected: event first_update_id={event_first_update_id} > expected={expected_next_update_id}"
+    )]
     UpdateGap {
         event_first_update_id: u64,
         expected_next_update_id: u64,
     },
 
-    #[error("Cannot apply update: last_applied_update_id is None (book not initialized with snapshot)")]
+    #[error(
+        "Cannot apply update: last_applied_update_id is None (book not initialized with snapshot)"
+    )]
     MissingSnapshot,
 }
 

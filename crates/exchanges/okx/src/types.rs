@@ -12,7 +12,7 @@ use url::Url;
 pub enum OkxMdMsg {
     Instruments(Vec<Instrument>),
     Raw(RawMdMsg),
-    ResetBookState
+    ResetBookState,
 }
 
 /* Connector/API configuration and subscription payloads */
@@ -130,13 +130,17 @@ pub enum ValidateBookError {
     #[error("Missing snapshot for this instrument")]
     MissingSnapshot,
 
-    #[error("Stale update: event prev_seq_id={event_prev_seq_id} < book prev_seq_id={book_prev_seq_id}")]
+    #[error(
+        "Stale update: event prev_seq_id={event_prev_seq_id} < book prev_seq_id={book_prev_seq_id}"
+    )]
     StaleUpdate {
         event_prev_seq_id: u64,
         book_prev_seq_id: u64,
     },
 
-    #[error("Update gap detected: event prev_seq_id={event_prev_seq_id} > expected prev_seq_id={expected_prev_seq_id}")]
+    #[error(
+        "Update gap detected: event prev_seq_id={event_prev_seq_id} > expected prev_seq_id={expected_prev_seq_id}"
+    )]
     UpdateGap {
         event_prev_seq_id: u64,
         expected_prev_seq_id: u64,

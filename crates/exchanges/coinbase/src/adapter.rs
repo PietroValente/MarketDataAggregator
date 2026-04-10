@@ -1,34 +1,53 @@
-use std::{collections::HashMap, error::Error, time::{SystemTime, UNIX_EPOCH}};
+use std::{
+    collections::HashMap,
+    error::Error,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use chrono::DateTime;
-use md_core::{book::BookLevels, events::{BookEventType, ControlEvent, EngineMessage, NormalizedBookData, NormalizedEvent}, helpers::adapter::{clear_book_state, compute_status, send_normalized_event, send_status}, traits::adapter::ExchangeAdapter, types::{Exchange, Instrument}};
+use md_core::{
+    book::BookLevels,
+    events::{BookEventType, ControlEvent, EngineMessage, NormalizedBookData, NormalizedEvent},
+    helpers::adapter::{clear_book_state, compute_status, send_normalized_event, send_status},
+    traits::adapter::ExchangeAdapter,
+    types::{Exchange, Instrument},
+};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tracing::{error, warn};
 
-use crate::types::{BookState, CoinbaseMdMsg, ParsedBookSnapshot, ParsedBookUpdate, Side, ValidateBookError, WsMessage};
+use crate::types::{
+    BookState, CoinbaseMdMsg, ParsedBookSnapshot, ParsedBookUpdate, Side, ValidateBookError,
+    WsMessage,
+};
 
 pub struct CoinbaseAdapter {
     raw_rx: Receiver<CoinbaseMdMsg>,
     normalized_tx: Sender<EngineMessage>,
     control_tx: Sender<ControlEvent>,
     book_states: HashMap<Instrument, BookState>,
-    live_books: usize
+    live_books: usize,
 }
 
 impl CoinbaseAdapter {
-    pub fn new(raw_rx: Receiver<CoinbaseMdMsg>, normalized_tx: Sender<EngineMessage>, control_tx: Sender<ControlEvent>) -> Self {
+    pub fn new(
+        raw_rx: Receiver<CoinbaseMdMsg>,
+        normalized_tx: Sender<EngineMessage>,
+        control_tx: Sender<ControlEvent>,
+    ) -> Self {
         Self {
             raw_rx,
             normalized_tx,
             control_tx,
             book_states: HashMap::new(),
-            live_books: 0
+            live_books: 0,
         }
     }
 
     fn validate_snapshot(&mut self, payload: &ParsedBookSnapshot) -> Result<(), ValidateBookError> {
         let Some(book) = self.book_states.get_mut(&payload.product_id) else {
-            return Err(ValidateBookError::InstrumentNotFound(payload.product_id.clone()));
+            return Err(ValidateBookError::InstrumentNotFound(
+                payload.product_id.clone(),
+            ));
         };
         if !book.initialized {
             book.initialized = true;
@@ -39,7 +58,9 @@ impl CoinbaseAdapter {
 
     fn validate_update(&mut self, payload: &ParsedBookUpdate) -> Result<(), ValidateBookError> {
         let Some(book) = self.book_states.get_mut(&payload.product_id) else {
-            return Err(ValidateBookError::InstrumentNotFound(payload.product_id.clone()));
+            return Err(ValidateBookError::InstrumentNotFound(
+                payload.product_id.clone(),
+            ));
         };
 
         if let Ok(elapsed) = SystemTime::now().duration_since(UNIX_EPOCH) {
@@ -61,7 +82,7 @@ impl CoinbaseAdapter {
         }
 
         if !book.initialized {
-            return Err(ValidateBookError::MissingSnapshot)
+            return Err(ValidateBookError::MissingSnapshot);
         }
         Ok(())
     }
@@ -72,72 +93,85 @@ impl CoinbaseAdapter {
                 CoinbaseMdMsg::ResetBookState => {
                     self.live_books = 0;
                     clear_book_state(&mut self.book_states);
-                    send_status::<CoinbaseAdapter>(&self.normalized_tx, compute_status(self.live_books, self.book_states.len()));
-                },
+                    send_status::<CoinbaseAdapter>(
+                        &self.normalized_tx,
+                        compute_status(self.live_books, self.book_states.len()),
+                    );
+                }
                 CoinbaseMdMsg::Instruments(symbols) => {
                     for i in symbols.iter() {
                         self.book_states.insert(i.clone(), BookState::new());
                     }
-                    send_status::<CoinbaseAdapter>(&self.normalized_tx, compute_status(self.live_books, self.book_states.len()));
-                },
-                CoinbaseMdMsg::Raw(msg) => {
-                    match serde_json::from_slice::<WsMessage>(&msg) {
-                        Ok(WsMessage::Confirmation(_)) => {
-                            continue;
-                        },
-                        Err(_) => {
-                            let text = String::from_utf8_lossy(&msg);
-                            error!(exchange = ?CoinbaseAdapter::exchange(), component = ?CoinbaseAdapter::component(), text = ?text, "error while parsing update");
-                        },
-                        Ok(WsMessage::Snapshot(depth)) => {
-                            let inst_id = depth.product_id.replace("-", "");
-                            if let Err(e) = self.validate_snapshot(&depth) {
-                                error!(exchange = ?CoinbaseAdapter::exchange(), component = ?CoinbaseAdapter::component(), error = ?e, "error while validating snapshot");
-                                if let Err(e) = self.control_tx.blocking_send(ControlEvent::Resync) {
-                                    error!(exchange = ?CoinbaseAdapter::exchange(), component = ?CoinbaseAdapter::component(), error = ?e, "error while sending resync");
-                                }
+                    send_status::<CoinbaseAdapter>(
+                        &self.normalized_tx,
+                        compute_status(self.live_books, self.book_states.len()),
+                    );
+                }
+                CoinbaseMdMsg::Raw(msg) => match serde_json::from_slice::<WsMessage>(&msg) {
+                    Ok(WsMessage::Confirmation(_)) => {
+                        continue;
+                    }
+                    Err(_) => {
+                        let text = String::from_utf8_lossy(&msg);
+                        error!(exchange = ?CoinbaseAdapter::exchange(), component = ?CoinbaseAdapter::component(), text = ?text, "error while parsing update");
+                    }
+                    Ok(WsMessage::Snapshot(depth)) => {
+                        let inst_id = depth.product_id.replace("-", "");
+                        if let Err(e) = self.validate_snapshot(&depth) {
+                            error!(exchange = ?CoinbaseAdapter::exchange(), component = ?CoinbaseAdapter::component(), error = ?e, "error while validating snapshot");
+                            if let Err(e) = self.control_tx.blocking_send(ControlEvent::Resync) {
+                                error!(exchange = ?CoinbaseAdapter::exchange(), component = ?CoinbaseAdapter::component(), error = ?e, "error while sending resync");
                             }
-                            let snapshot_event = NormalizedEvent::Book(BookEventType::Snapshot, NormalizedBookData {
+                        }
+                        let snapshot_event = NormalizedEvent::Book(
+                            BookEventType::Snapshot,
+                            NormalizedBookData {
                                 instrument: Instrument::from(inst_id),
                                 levels: BookLevels {
                                     asks: depth.asks,
-                                    bids: depth.bids
+                                    bids: depth.bids,
                                 },
-                                checksum: None
-                            });
-                            send_normalized_event::<CoinbaseAdapter>(&self.normalized_tx, snapshot_event);
-                            send_status::<CoinbaseAdapter>(&self.normalized_tx, compute_status(self.live_books, self.book_states.len()));
-                        },
-                        Ok(WsMessage::Update(depth)) => {
-                            let inst_id = depth.product_id.replace("-", "");
-                            if let Err(e) = self.validate_update(&depth) {
-                                error!(exchange = ?CoinbaseAdapter::exchange(), component = ?CoinbaseAdapter::component(), error = ?e, "error while validating update");
-                                if let Err(e) = self.control_tx.blocking_send(ControlEvent::Resync) {
-                                    error!(exchange = ?CoinbaseAdapter::exchange(), component = ?CoinbaseAdapter::component(), error = ?e, "error while sending resync");
-                                }
+                                checksum: None,
+                            },
+                        );
+                        send_normalized_event::<CoinbaseAdapter>(
+                            &self.normalized_tx,
+                            snapshot_event,
+                        );
+                        send_status::<CoinbaseAdapter>(
+                            &self.normalized_tx,
+                            compute_status(self.live_books, self.book_states.len()),
+                        );
+                    }
+                    Ok(WsMessage::Update(depth)) => {
+                        let inst_id = depth.product_id.replace("-", "");
+                        if let Err(e) = self.validate_update(&depth) {
+                            error!(exchange = ?CoinbaseAdapter::exchange(), component = ?CoinbaseAdapter::component(), error = ?e, "error while validating update");
+                            if let Err(e) = self.control_tx.blocking_send(ControlEvent::Resync) {
+                                error!(exchange = ?CoinbaseAdapter::exchange(), component = ?CoinbaseAdapter::component(), error = ?e, "error while sending resync");
                             }
-                            let mut bids = Vec::new();
-                            let mut asks = Vec::new();
-        
-                            for (side, price, qty) in depth.changes {
-                                match side {
-                                    Side::Bid => bids.push((price, qty)),
-                                    Side::Ask => asks.push((price, qty)),
-                                }
-                            }
-        
-                            let update_event = NormalizedEvent::Book(BookEventType::Update, NormalizedBookData {
-                                instrument: Instrument::from(inst_id),
-                                levels: BookLevels {
-                                    asks,
-                                    bids
-                                },
-                                checksum: None
-                            });
-                            send_normalized_event::<CoinbaseAdapter>(&self.normalized_tx, update_event);
                         }
-                    }        
-                }
+                        let mut bids = Vec::new();
+                        let mut asks = Vec::new();
+
+                        for (side, price, qty) in depth.changes {
+                            match side {
+                                Side::Bid => bids.push((price, qty)),
+                                Side::Ask => asks.push((price, qty)),
+                            }
+                        }
+
+                        let update_event = NormalizedEvent::Book(
+                            BookEventType::Update,
+                            NormalizedBookData {
+                                instrument: Instrument::from(inst_id),
+                                levels: BookLevels { asks, bids },
+                                checksum: None,
+                            },
+                        );
+                        send_normalized_event::<CoinbaseAdapter>(&self.normalized_tx, update_event);
+                    }
+                },
             }
         }
     }
@@ -151,12 +185,20 @@ impl ExchangeAdapter for CoinbaseAdapter {
         Exchange::Coinbase
     }
 
-    fn validate_snapshot(&mut self, payload: &Self::SnapshotPayload) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
-        CoinbaseAdapter::validate_snapshot(self, payload).map_err(|e| Box::new(e) as Box<dyn Error + Send + Sync + 'static>)
+    fn validate_snapshot(
+        &mut self,
+        payload: &Self::SnapshotPayload,
+    ) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
+        CoinbaseAdapter::validate_snapshot(self, payload)
+            .map_err(|e| Box::new(e) as Box<dyn Error + Send + Sync + 'static>)
     }
 
-    fn validate_update(&mut self, payload: &Self::UpdatePayload) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
-        CoinbaseAdapter::validate_update(self, payload).map_err(|e| Box::new(e) as Box<dyn Error + Send + Sync + 'static>)
+    fn validate_update(
+        &mut self,
+        payload: &Self::UpdatePayload,
+    ) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
+        CoinbaseAdapter::validate_update(self, payload)
+            .map_err(|e| Box::new(e) as Box<dyn Error + Send + Sync + 'static>)
     }
 
     fn run(&mut self) {
@@ -180,8 +222,16 @@ mod tests {
             op_type: "l2update".to_owned(),
             product_id: instrument(symbol),
             changes: vec![
-                (Side::Bid, Price(Decimal::new(10000, 2)), Qty(Decimal::new(1000, 3))),
-                (Side::Ask, Price(Decimal::new(10100, 2)), Qty(Decimal::new(2000, 3))),
+                (
+                    Side::Bid,
+                    Price(Decimal::new(10000, 2)),
+                    Qty(Decimal::new(1000, 3)),
+                ),
+                (
+                    Side::Ask,
+                    Price(Decimal::new(10100, 2)),
+                    Qty(Decimal::new(2000, 3)),
+                ),
             ],
             time: ts.to_owned(),
         }
@@ -221,7 +271,9 @@ mod tests {
         let (normalized_tx, _normalized_rx) = mpsc::channel(8);
         let (control_tx, _control_rx) = mpsc::channel(8);
         let mut adapter = CoinbaseAdapter::new(raw_rx, normalized_tx, control_tx);
-        adapter.book_states.insert(instrument("BTCUSD"), BookState::new());
+        adapter
+            .book_states
+            .insert(instrument("BTCUSD"), BookState::new());
 
         let err = adapter
             .validate_update(&update("BTCUSD", "2024-01-01T00:00:00Z"))
@@ -248,7 +300,9 @@ mod tests {
         let (normalized_tx, _normalized_rx) = mpsc::channel(8);
         let (control_tx, _control_rx) = mpsc::channel(8);
         let mut adapter = CoinbaseAdapter::new(raw_rx, normalized_tx, control_tx);
-        adapter.book_states.insert(instrument("BTCUSD"), BookState::new());
+        adapter
+            .book_states
+            .insert(instrument("BTCUSD"), BookState::new());
         adapter.validate_snapshot(&snapshot("BTCUSD")).unwrap();
 
         let mut seed = 0xC01B_A553_u64;
@@ -261,7 +315,10 @@ mod tests {
             };
             let result = adapter.validate_update(&update("BTCUSD", &ts));
             if ts.starts_with("bad-ts-") {
-                assert!(matches!(result, Err(ValidateBookError::InvalidTimestamp(_))));
+                assert!(matches!(
+                    result,
+                    Err(ValidateBookError::InvalidTimestamp(_))
+                ));
             } else {
                 assert!(result.is_ok(), "valid RFC3339 timestamp should pass");
             }

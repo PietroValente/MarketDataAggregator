@@ -37,7 +37,11 @@ pub fn compute_checksum(bids: Vec<BookLevel>, asks: Vec<BookLevel>) -> i32 {
     hasher.finalize() as i32
 }
 
-pub fn verify_checksum(bids: Vec<BookLevel>, asks: Vec<BookLevel>, expected: i32) -> Result<(), ChecksumError> {
+pub fn verify_checksum(
+    bids: Vec<BookLevel>,
+    asks: Vec<BookLevel>,
+    expected: i32,
+) -> Result<(), ChecksumError> {
     let computed = compute_checksum(bids, asks);
 
     if computed != expected {

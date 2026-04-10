@@ -18,10 +18,16 @@ pub trait ExchangeAdapter {
     }
 
     /// Validate a parsed snapshot payload.
-    fn validate_snapshot(&mut self, payload: &Self::SnapshotPayload) -> Result<(), Box<dyn Error + Send + Sync + 'static>>;
+    fn validate_snapshot(
+        &mut self,
+        payload: &Self::SnapshotPayload,
+    ) -> Result<(), Box<dyn Error + Send + Sync + 'static>>;
 
     /// Validate a parsed update payload.
-    fn validate_update(&mut self, payload: &Self::UpdatePayload) -> Result<(), Box<dyn Error + Send + Sync + 'static>>;
+    fn validate_update(
+        &mut self,
+        payload: &Self::UpdatePayload,
+    ) -> Result<(), Box<dyn Error + Send + Sync + 'static>>;
 
     /// Run the adapter event loop (typically until the inbound stream is closed).
     fn run(&mut self);

@@ -1,14 +1,21 @@
 use core::fmt;
-use std::{cmp::{Ordering, Reverse}, collections::BTreeMap, fmt::Display};
 use rust_decimal::{Decimal, prelude::ToPrimitive};
 use rust_decimal_macros::dec;
+use std::{
+    cmp::{Ordering, Reverse},
+    collections::BTreeMap,
+    fmt::Display,
+};
 
-use crate::{helpers::book::{verify_checksum, ChecksumError}, types::{Price, Qty}};
+use crate::{
+    helpers::book::{ChecksumError, verify_checksum},
+    types::{Price, Qty},
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BookLevel {
     qty: Qty,
-    px: Price
+    px: Price,
 }
 
 impl PartialOrd for BookLevel {
@@ -27,10 +34,7 @@ impl Ord for BookLevel {
 
 impl BookLevel {
     pub fn new(qty: Qty, px: Price) -> Self {
-        Self {
-            qty,
-            px
-        }
+        Self { qty, px }
     }
 
     pub fn qty(&self) -> &Qty {
@@ -187,7 +191,7 @@ pub struct BookLevels {
 pub struct LocalBook {
     update_id: u64,
     asks: BTreeMap<Price, BookLevel>,
-    bids: BTreeMap<Reverse<Price>, BookLevel>
+    bids: BTreeMap<Reverse<Price>, BookLevel>,
 }
 
 impl LocalBook {
@@ -195,7 +199,7 @@ impl LocalBook {
         Self {
             update_id: 0,
             asks: BTreeMap::new(),
-            bids: BTreeMap::new()
+            bids: BTreeMap::new(),
         }
     }
 
@@ -227,11 +231,7 @@ impl LocalBook {
     }
 
     pub fn verify_okx_bitget_checksum(&self, expected: i32) -> Result<(), ChecksumError> {
-        verify_checksum(
-            self.top_n_bids(25),
-            self.top_n_asks(25),
-            expected,
-        )
+        verify_checksum(self.top_n_bids(25), self.top_n_asks(25), expected)
     }
 
     fn upsert_asks(&mut self, price: Price, qty: Qty) {
@@ -273,7 +273,7 @@ impl LocalBook {
         if ask.len() != 1 || bid.len() != 1 {
             return None;
         }
-        Some((ask[0].px + bid[0].px)/Price(dec!(2)))
+        Some((ask[0].px + bid[0].px) / Price(dec!(2)))
     }
 
     pub fn top_n_asks(&self, n: usize) -> Vec<BookLevel> {
@@ -326,8 +326,14 @@ mod tests {
 
         assert_eq!(book.asks_len(), 1);
         assert_eq!(book.bids_len(), 1);
-        assert_eq!(book.top_n_asks(10), vec![BookLevel::new(qty(5000), price(10300))]);
-        assert_eq!(book.top_n_bids(10), vec![BookLevel::new(qty(6000), price(9800))]);
+        assert_eq!(
+            book.top_n_asks(10),
+            vec![BookLevel::new(qty(5000), price(10300))]
+        );
+        assert_eq!(
+            book.top_n_bids(10),
+            vec![BookLevel::new(qty(6000), price(9800))]
+        );
     }
 
     #[test]
@@ -344,8 +350,8 @@ mod tests {
                 (price(10100), qty(1300)), // insert new asks
             ],
             bids: vec![
-                (price(9900), qty(0)),     // remove existing bids
-                (price(9800), qty(1400)),  // insert new bids
+                (price(9900), qty(0)),    // remove existing bids
+                (price(9800), qty(1400)), // insert new bids
             ],
         });
 
@@ -358,7 +364,10 @@ mod tests {
                 BookLevel::new(qty(1300), price(10100)),
             ]
         );
-        assert_eq!(book.top_n_bids(10), vec![BookLevel::new(qty(1400), price(9800))]);
+        assert_eq!(
+            book.top_n_bids(10),
+            vec![BookLevel::new(qty(1400), price(9800))]
+        );
     }
 
     #[test]
@@ -411,14 +420,14 @@ mod tests {
         // Same price repeated in one batch should be processed in order.
         book.apply_update(BookLevels {
             asks: vec![
-                (price(10000), qty(0)),     // remove existing
-                (price(10000), qty(1200)),  // reinsert
-                (price(10000), qty(1300)),  // replace again (final value)
+                (price(10000), qty(0)),    // remove existing
+                (price(10000), qty(1200)), // reinsert
+                (price(10000), qty(1300)), // replace again (final value)
             ],
             bids: vec![
-                (price(9900), qty(1400)),   // replace existing
-                (price(9900), qty(0)),      // remove
-                (price(9900), qty(1500)),   // reinsert (final value)
+                (price(9900), qty(1400)), // replace existing
+                (price(9900), qty(0)),    // remove
+                (price(9900), qty(1500)), // reinsert (final value)
             ],
         });
 
@@ -436,14 +445,8 @@ mod tests {
     fn okx_bitget_checksum_matches_compute_checksum_for_top_25() {
         let mut book = LocalBook::new();
         book.apply_snapshot(BookLevels {
-            asks: vec![
-                (price(10200), qty(2000)),
-                (price(10300), qty(3000)),
-            ],
-            bids: vec![
-                (price(10100), qty(5000)),
-                (price(10000), qty(6000)),
-            ],
+            asks: vec![(price(10200), qty(2000)), (price(10300), qty(3000))],
+            bids: vec![(price(10100), qty(5000)), (price(10000), qty(6000))],
         });
 
         let expected = compute_checksum(book.top_n_bids(25), book.top_n_asks(25));
