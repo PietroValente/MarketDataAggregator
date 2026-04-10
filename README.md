@@ -94,10 +94,7 @@ The design favors **message passing over locking**:
 
 ## Engineering approach
 
-1. **Make the full path work end-to-end** for one exchange, then replicate the pattern for others.
-2. **Lock behavior with tests** (especially the engine): snapshot + update sequences, resync triggers, unknown instruments, query edge cases. Tests allow **iterative refactors** without guessing.
-3. **Consolidate duplication** only after behavior is clear—e.g. generic helpers and traits in `md_core` so each venue stays thin.
-4. **Observability early** (structured `tracing` + durable logs); **profiling** as a later pass once the architecture is stable.
+The implementation started by making the **full path work end-to-end** for one exchange, then replicating the same pattern for others. As components were introduced and stabilized, targeted **unit tests** were added incrementally to validate **behavior** (especially around engine flows such as snapshots, updates, resyncs, unknown instruments, and query edge cases); those tests later became the safety net for **iterative refactors**, confirming that behavior remained correct while simplifying duplicated code with **generic helpers** in `md_core`. **Observability** was introduced early (structured `tracing` + durable logs), while **profiling** was treated as a later optimization pass once the architecture was stable.
 
 ---
 
@@ -105,7 +102,7 @@ The design favors **message passing over locking**:
 
 | Principle | Rationale |
 |-----------|-----------|
-| **Low latency** | Avoid contended locks on the book hot path; keep adapter validation and normalization tight; use bounded queues so you can reason about lag. |
+| **Low latency** | **Avoid contended locks** on the book hot path; keep adapter validation and normalization tight; use **bounded queues** so you can reason about lag. |
 | **Fault tolerance** | Reconnect + backoff; engine-driven **resync** when local books cannot be trusted; unknown exchanges or instruments do not take down the process. |
 | **Scalability** | More venues mean more connector+adapter pairs and more WebSocket fan-out—the model is **sharded by exchange** rather than one giant shared state. |
 | **Observability** | Structured fields (`component`, `exchange`, `instrument`) and ScyllaDB storage support operational questions (“what failed for OKX in the last hour?”). |
@@ -125,16 +122,16 @@ The design favors **message passing over locking**:
 
 ---
 
-## Usage
+## CLI Usage
 
-Start the app (`cargo run -p app` after configuration). The CLI prints a command menu. Exchange names are **case-insensitive** (`binance`, `okx`, …).
+Start the app (`cargo run --release` after configuration). The CLI prints a command menu. Exchange names are **case-insensitive** (`binance`, `okx`, …).
 
 | Command | Description |
 |---------|-------------|
-| `book <exchange> <instrument> <depth>` | Live book: asks above, bids below, mid in the center. **Esc** returns to the menu. |
-| `best <instrument>` | Live best bid/ask **per exchange**. |
-| `spread <instrument>` | Live **cross-exchange** spread view. |
-| `depth <instrument> <depth>` | Live **aggregated** depth across venues. |
+| `book <exchange> <instrument> <depth>` | Live exchange-specific book (for the selected venue): asks, bids, mid, spread. |
+| `best <instrument>` | Live best bid/ask per exchange. |
+| `spread <instrument>` | Live cross-exchange spread view. |
+| `depth <instrument> <depth>` | Live aggregated depth across venues. |
 | `status <exchange>` | One-shot connectivity / initialization status for one venue. |
 | `status --all` or `status_all` | Live status for all exchanges. |
 | `list [exchange]` | One-shot list of instruments (optional filter by exchange). |
@@ -172,20 +169,12 @@ docker run -d --name scylla -p 9042:9042 scylladb/scylla
 
 If the DB writer fails to start, the app prints a warning and **continues without persisting logs** (see `app` startup).
 
-**2. Configuration**
-
-Copy or edit `config/config.toml`:
-
-- **`[scylladb]`** — `uri` (e.g. `127.0.0.1:9042`) and `init_path` to `config/init.cql`.
-- **`[channels]`** — `raw_buffer`, `normalized_buffer`, `control_buffer`, `log_buffer`.
-- **Per-exchange sections** — REST `exchange_info`, WebSocket URL, `max_subscription_per_ws`. Binance also sets `snapshot` REST URL for depth snapshots.
-
-**3. Run**
+**2. Run**
 
 From the repository root:
 
 ```bash
-cargo run -p app
+cargo run --release
 ```
 
 ---
