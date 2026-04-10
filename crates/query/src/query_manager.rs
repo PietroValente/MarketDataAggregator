@@ -12,6 +12,13 @@ pub struct QueryManager {
 impl QueryManager {
     const PRICE_COL_WIDTH: usize = 16;
     const QTY_COL_WIDTH: usize = 12;
+    const AVAILABLE_EXCHANGES: [Exchange; 5] = [
+        Exchange::Binance,
+        Exchange::Bitget,
+        Exchange::Bybit,
+        Exchange::Coinbase,
+        Exchange::Okx,
+    ];
 
     pub fn new(normalized_tx: Sender<EngineMessage>) -> Self {
         Self { normalized_tx }
@@ -207,6 +214,9 @@ impl QueryManager {
                 "clear" => {
                     self.clear_screen();
                 }
+                "exchanges" => {
+                    self.print_available_exchanges();
+                }
                 "exit" => {
                     return;
                 }
@@ -218,9 +228,18 @@ impl QueryManager {
     }
 
     fn print_welcome(&self) {
-        println!("MarketDataAggregator CLI");
-        println!("Live views update continuously; press `Esc` to return to the menu.");
+        println!("MarketDataAggregator CLI\n");
+        self.print_available_exchanges();
         println!();
+    }
+
+    fn print_available_exchanges(&self) {
+        let exchanges = Self::AVAILABLE_EXCHANGES
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        println!("Available exchanges: {exchanges}");
     }
 
     fn print_menu(&self) {
@@ -236,6 +255,7 @@ impl QueryManager {
             ("search --contains <text> [--limit N]", "Substring search (one-shot)"),
             ("search --suffix <text> [--limit N]", "Suffix search (one-shot)"),
             ("search --glob <pattern> [--limit N]", "Glob search using `*` (one-shot)"),
+            ("exchanges", "Print available exchanges"),
             ("clear", "Clear screen"),
             ("exit", "Exit"),
         ];

@@ -136,6 +136,7 @@ Start the app (`cargo run --release` after configuration). The CLI prints a comm
 | `status --all` or `status_all` | Live status for all exchanges. |
 | `list [exchange]` | One-shot list of instruments (optional filter by exchange). |
 | `search …` | Prefix search; or `--contains`, `--suffix`, `--glob` with optional `--limit N`. |
+| `exchanges` | Print the list of available exchanges. |
 | `clear` | Clear the terminal screen. |
 | `exit` | Quit the application. |
 
