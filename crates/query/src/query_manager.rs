@@ -1290,7 +1290,6 @@ impl QueryManager {
         let _ = disable_raw_mode();
         self.clear_screen();
         println!("Exited top mode");
-
     }
 
     fn render_top_mode(

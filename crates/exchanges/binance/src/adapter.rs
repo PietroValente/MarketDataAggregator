@@ -347,10 +347,7 @@ mod tests {
         let mut adapter = BinanceAdapter::new(drain_tx, dummy_in_rx, normalized_tx, control_tx);
         let symbol = instrument("BTCUSDT");
 
-        let book = adapter
-            .book_states
-            .entry(symbol.clone())
-            .or_default();
+        let book = adapter.book_states.entry(symbol.clone()).or_default();
         book.symbols_pending_snapshot
             .push(make_update_msg("BTCUSDT", 101, 101, "depthUpdate"));
         book.symbols_pending_snapshot

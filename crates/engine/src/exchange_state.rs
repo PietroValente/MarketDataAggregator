@@ -56,10 +56,7 @@ impl ExchangeState {
             checksum,
         } = snapshot;
 
-        let book = self
-            .markets
-            .entry(instrument.clone())
-            .or_default();
+        let book = self.markets.entry(instrument.clone()).or_default();
 
         book.apply_snapshot(levels);
 
