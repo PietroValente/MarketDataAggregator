@@ -17,7 +17,7 @@
 
 At runtime, data moves in one direction for market events and the opposite for control/resync. The diagram below is the mental model:
 
-![MarketDataAggregator Data_flow](https://github.com/PietroValente/MarketDataAggregator/blob/main/images/Data_flow.png)
+![MarketDataAggregator Data_flow](https://raw.githubusercontent.com/PietroValente/MarketDataAggregator/main/images/Data_flow.svg)
 
 The system ingests real-time market data from multiple exchanges via WebSocket streams and REST snapshots.
 Each exchange is handled independently through an async Connector, responsible for managing connections, subscriptions, and reconnections.
@@ -45,7 +45,7 @@ This design leverages message passing over shared state, providing strong isolat
 
 The connector is the **async** side of each exchange: everything that touches sockets, HTTP for discovery and snapshots, and backoff lives here, so the rest of the pipeline never blocks on the network.
 
-![MarketDataAggregator Connector](https://github.com/PietroValente/MarketDataAggregator/blob/main/images/Connector.png)
+![MarketDataAggregator Connector](https://raw.githubusercontent.com/PietroValente/MarketDataAggregator/main/images/Connector.svg)
 
 The figure above lines up with `md_core::connector::tasks` and the per-venue connector types. A **`control_manager_task`** subscribes to **`ControlEvent`** from the engine—for instance **`Resync`** when a book can no longer be trusted. On resync it injects **`InboundEvent::ClearBookState`** (so the connector’s main loop can forward a **reset** to the adapter on the **raw** channel) and sends **`ManagerCommand::RecreateWithSnapshots`** so the **connection manager** tears down sockets, reconnects, and runs **snapshot-driven** recovery where the exchange supports it. Separately, the **`connection_manager_task`** owns **all WebSockets** for that venue: each stream is split into a **reader** and a **writer**. Readers enqueue **text/binary frames**, **pings**, and **closes/errors** as **`InboundEvent`s**; writers dequeue **`WriteCommand`s** (subscriptions, **pongs**, other raw **`Message`s**) so the socket is touched from one place only. The connector’s **`start`** loop consumes that inbound stream and maps it to the venue **`mpsc`** the adapter reads—market payloads as wire messages, **`ResetBookState`** when resyncing, **`pong`** routed back through the manager as **`ManagerCommand::Pong`**, and **`ConnectionClosed`** triggering a controlled resubscribe.
 
