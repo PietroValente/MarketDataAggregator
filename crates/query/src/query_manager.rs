@@ -50,7 +50,7 @@ impl QueryManager {
             let mut input = String::new();
             io::stdin().read_line(&mut input).unwrap();
 
-            let mut line = input.trim().split_whitespace();
+            let mut line = input.split_whitespace();
             let cmd = line.next().unwrap_or("");
 
             match cmd {
@@ -1199,7 +1199,7 @@ impl QueryManager {
         let mut last_bids: Vec<String> = Vec::new();
         let mut last_status: Option<String> = None;
 
-        let result = (|| {
+        (|| {
             loop {
                 while event::poll(poll_interval).unwrap_or(false) {
                     let Ok(ev) = event::read() else {
@@ -1227,7 +1227,7 @@ impl QueryManager {
 
                 let book = EngineMessage::Query(EngineQuery::Book {
                     exchange,
-                    instrument: Instrument::from(instrument.clone()),
+                    instrument: Instrument(instrument.clone()),
                     depth,
                     reply_to: book_tx,
                 });
@@ -1291,7 +1291,6 @@ impl QueryManager {
         self.clear_screen();
         println!("Exited top mode");
 
-        result
     }
 
     fn render_top_mode(

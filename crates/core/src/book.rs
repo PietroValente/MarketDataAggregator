@@ -194,6 +194,12 @@ pub struct LocalBook {
     bids: BTreeMap<Reverse<Price>, BookLevel>,
 }
 
+impl Default for LocalBook {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LocalBook {
     pub fn new() -> Self {
         Self {
@@ -486,7 +492,7 @@ mod tests {
     fn random_updates_match_reference_model_under_stress() {
         use rand::{Rng, SeedableRng, rngs::StdRng};
 
-        let mut rng = StdRng::seed_from_u64(0xA11CE_B00C);
+        let mut rng = StdRng::seed_from_u64(0x000A_11CE_B00C);
         let mut book = LocalBook::new();
         let mut asks_ref: BTreeMap<Price, Qty> = BTreeMap::new();
         let mut bids_ref: BTreeMap<Price, Qty> = BTreeMap::new();

@@ -154,7 +154,7 @@ impl BitgetAdapter {
                                     let snapshot_event = NormalizedEvent::Book(
                                         BookEventType::Snapshot,
                                         NormalizedBookData {
-                                            instrument: Instrument::from(inst_id.clone()),
+                                            instrument: inst_id.clone(),
                                             levels: BookLevels {
                                                 asks: data.asks,
                                                 bids: data.bids,
@@ -207,7 +207,7 @@ impl BitgetAdapter {
                                     let update_event = NormalizedEvent::Book(
                                         BookEventType::Update,
                                         NormalizedBookData {
-                                            instrument: Instrument::from(inst_id.clone()),
+                                            instrument: inst_id.clone(),
                                             levels: BookLevels {
                                                 asks: data.asks,
                                                 bids: data.bids,

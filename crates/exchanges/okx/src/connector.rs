@@ -2,7 +2,7 @@ use std::{error::Error, sync::Arc};
 
 use md_core::{
     connector::{
-        tasks::{connection_manager_task, control_manager_task},
+        tasks::{ConnectionManagerParams, connection_manager_task, control_manager_task},
         types::{BACKOFF_SECS, ConnectorError, ManagerCommand},
     },
     events::{ControlEvent, InboundEvent, PingMsg},
@@ -60,13 +60,15 @@ impl OkxConnector {
             _,
             _,
         >(
-            ws_url.clone(),
-            None,
-            subscriptions_payloads,
-            inbound_tx.clone(),
-            None,
-            manager_tx.clone(),
-            manager_rx,
+            ConnectionManagerParams {
+                ws_url: ws_url.clone(),
+                snapshot_url: None,
+                subscriptions_payloads,
+                inbound_tx: inbound_tx.clone(),
+                raw_tx: None,
+                cmd_tx: manager_tx.clone(),
+                cmd_rx: manager_rx,
+            },
             recreate_with_snapshots::<OkxConnector, OkxMdMsg>,
         ));
 

@@ -267,7 +267,7 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
         use rand::{Rng, SeedableRng, rngs::StdRng};
 
-        let mut rng = StdRng::seed_from_u64(0xE_71_71_E);
+        let mut rng = StdRng::seed_from_u64(0x00E7_171E);
         let (control_tx, mut control_rx) = mpsc::channel::<ControlEvent>(64);
         let (engine_tx, h) = run_engine(HashMap::from([(Exchange::Bitget, control_tx)]));
 

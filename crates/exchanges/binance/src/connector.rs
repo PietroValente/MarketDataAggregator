@@ -2,7 +2,7 @@ use std::{error::Error, sync::Arc};
 
 use md_core::{
     connector::{
-        tasks::{connection_manager_task, control_manager_task},
+        tasks::{ConnectionManagerParams, connection_manager_task, control_manager_task},
         types::{BACKOFF_SECS, ConnectorError, ManagerCommand},
     },
     events::{ControlEvent, InboundEvent, PingMsg},
@@ -68,13 +68,15 @@ impl BinanceConnector {
             _,
             _,
         >(
-            ws_url.clone(),
-            Some(snapshot_url),
-            subscriptions_payloads,
-            inbound_tx.clone(),
-            Some(raw_tx.clone()),
-            manager_tx.clone(),
-            manager_rx,
+            ConnectionManagerParams {
+                ws_url: ws_url.clone(),
+                snapshot_url: Some(snapshot_url),
+                subscriptions_payloads,
+                inbound_tx: inbound_tx.clone(),
+                raw_tx: Some(raw_tx.clone()),
+                cmd_tx: manager_tx.clone(),
+                cmd_rx: manager_rx,
+            },
             recreate_with_snapshots,
         ));
 

@@ -140,14 +140,18 @@ pub async fn control_manager_task<T>(
 /// and orchestrates full reconnections via snapshot-based recovery.
 /// Recreate operations are executed in a background task with retry + backoff,
 /// ensuring only one rebuild is in progress at a time.
+pub struct ConnectionManagerParams<S, Raw> {
+    pub ws_url: Arc<Url>,
+    pub snapshot_url: Option<Arc<Url>>,
+    pub subscriptions_payloads: Arc<S>,
+    pub inbound_tx: Sender<InboundEvent>,
+    pub raw_tx: Option<Sender<Raw>>,
+    pub cmd_tx: Sender<ManagerCommand>,
+    pub cmd_rx: Receiver<ManagerCommand>,
+}
+
 pub async fn connection_manager_task<T, S, Raw, Recreate, Fut>(
-    ws_url: Arc<Url>,
-    snapshot_url: Option<Arc<Url>>,
-    subscriptions_payloads: Arc<S>,
-    inbound_tx: Sender<InboundEvent>,
-    raw_tx: Option<Sender<Raw>>,
-    cmd_tx: Sender<ManagerCommand>,
-    mut cmd_rx: Receiver<ManagerCommand>,
+    params: ConnectionManagerParams<S, Raw>,
     recreate: Recreate,
 ) where
     T: ExchangeConnector,
@@ -167,6 +171,16 @@ pub async fn connection_manager_task<T, S, Raw, Recreate, Fut>(
         + 'static,
     Fut: Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send + 'static,
 {
+    let ConnectionManagerParams {
+        ws_url,
+        snapshot_url,
+        subscriptions_payloads,
+        inbound_tx,
+        raw_tx,
+        cmd_tx,
+        mut cmd_rx,
+    } = params;
+
     let mut connections: HashMap<u8, ConnectionTasks> = HashMap::new();
     let mut recreate_in_progress = false;
 

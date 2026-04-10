@@ -59,7 +59,7 @@ impl ExchangeState {
         let book = self
             .markets
             .entry(instrument.clone())
-            .or_insert_with(LocalBook::new);
+            .or_default();
 
         book.apply_snapshot(levels);
 
@@ -120,7 +120,7 @@ impl ExchangeState {
     ) -> Result<Vec<BookLevel>, ExchangeStateError> {
         let local_book = self
             .markets
-            .get(&instrument)
+            .get(instrument)
             .ok_or_else(|| ExchangeStateError::InstrumentNotFound(instrument.clone()))?;
         Ok(local_book.top_n_asks(depth))
     }
@@ -132,7 +132,7 @@ impl ExchangeState {
     ) -> Result<Vec<BookLevel>, ExchangeStateError> {
         let local_book = self
             .markets
-            .get(&instrument)
+            .get(instrument)
             .ok_or_else(|| ExchangeStateError::InstrumentNotFound(instrument.clone()))?;
         Ok(local_book.top_n_bids(depth))
     }
@@ -152,7 +152,7 @@ impl ExchangeState {
         let mid = local_book.mid();
         Ok(BookView {
             exchange: self.exchange,
-            instrument: instrument,
+            instrument,
             asks,
             bids,
             spread,

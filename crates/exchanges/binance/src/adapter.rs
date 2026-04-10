@@ -350,7 +350,7 @@ mod tests {
         let book = adapter
             .book_states
             .entry(symbol.clone())
-            .or_insert_with(BookState::new);
+            .or_default();
         book.symbols_pending_snapshot
             .push(make_update_msg("BTCUSDT", 101, 101, "depthUpdate"));
         book.symbols_pending_snapshot

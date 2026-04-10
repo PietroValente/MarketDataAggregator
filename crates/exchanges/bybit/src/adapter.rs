@@ -142,7 +142,7 @@ impl BybitAdapter {
                                 let snapshot_event = NormalizedEvent::Book(
                                     BookEventType::Snapshot,
                                     NormalizedBookData {
-                                        instrument: Instrument::from(depth.data.symbol),
+                                        instrument: depth.data.symbol,
                                         levels: BookLevels {
                                             asks: depth.data.asks,
                                             bids: depth.data.bids,
@@ -189,7 +189,7 @@ impl BybitAdapter {
                                 let update_event = NormalizedEvent::Book(
                                     BookEventType::Update,
                                     NormalizedBookData {
-                                        instrument: Instrument::from(depth.data.symbol),
+                                        instrument: depth.data.symbol,
                                         levels: BookLevels {
                                             asks: depth.data.asks,
                                             bids: depth.data.bids,
