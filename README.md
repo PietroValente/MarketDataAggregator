@@ -193,3 +193,6 @@ cargo run --release
 
 The system has been monitored over extended runs and shows **strong long-term performance stability** (steady throughput, predictable latency, no progressive degradation). Structured logging and tracing are in place, and deeper **CPU/async profiling** (e.g. flamegraphs, Tokio console, connector latency histograms) remains available as a targeted optimization step for specific deployment workloads.
 
+## Contributing
+
+Contributions, bug reports, and suggestions are welcome. Please read [CONTRIBUTING.md](./CONTRIBUTING.md) first.
