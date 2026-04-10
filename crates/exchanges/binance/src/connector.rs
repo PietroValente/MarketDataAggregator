@@ -4,7 +4,7 @@ use md_core::{connector::{tasks::{connection_manager_task, control_manager_task}
 use reqwest::Client;
 use tokio::{sync::mpsc::{channel, Receiver, Sender}, time::Duration};
 use tokio_tungstenite::tungstenite::Message;
-use tracing::{error, info};
+use tracing::{error, warn};
 use url::Url;
 
 use crate::{helpers::recreate_with_snapshots, types::{ApiResponse, BinanceMdMsg, BinanceUrls, SubscriptionBatch, SubscriptionRequest, Subscriptions}};
@@ -77,7 +77,14 @@ impl BinanceConnector {
             &BACKOFF_SECS,
             || BinanceConnector::get_subscriptions_list(client.clone(), rest_url),
             |e, attempt: usize, delay: Duration| {
-                error!(exchange = ?BinanceConnector::exchange(), component = ?BinanceConnector::component(), error = ?e, attempt = ?attempt, delay = ?delay, "error while building subscriptions");
+                error!(
+                    exchange = ?BinanceConnector::exchange(),
+                    component = ?BinanceConnector::component(),
+                    error = ?e,
+                    attempt = attempt + 1,
+                    delay_ms = delay.as_millis() as u64,
+                    "error while building subscriptions"
+                );
             },
         ).await;
 
@@ -153,7 +160,12 @@ impl BinanceConnector {
                     }
                 },
                 InboundEvent::ConnectionClosed => {
-                    info!(exchange = ?BinanceConnector::exchange(), component = ?BinanceConnector::component(), "connection close, reconnecting");
+                    warn!(
+                        exchange = ?BinanceConnector::exchange(),
+                        component = ?BinanceConnector::component(),
+                        reason = "connection_closed",
+                        "connection closed, scheduling reconnect"
+                    );
                     if let Err(e) = self.subscribe_streams().await {
                         error!(exchange = ?BinanceConnector::exchange(), component = ?BinanceConnector::component(), error = ?e, "error while subscribing to streams");
                         continue;

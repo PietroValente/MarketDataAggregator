@@ -70,7 +70,13 @@ impl BinanceAdapter {
             let latency = now.saturating_sub(payload.event_time);
 
             if latency > 1000 {
-                warn!(exchange = ?BinanceAdapter::exchange(), component = ?BinanceAdapter::component(), symbol = ?payload.symbol, "high latency for update: {} ms", latency);
+                warn!(
+                    exchange = ?BinanceAdapter::exchange(),
+                    component = ?BinanceAdapter::component(),
+                    symbol = ?payload.symbol,
+                    latency_ms = latency,
+                    "high latency for update"
+                );
             }
         }
 
@@ -180,13 +186,33 @@ impl BinanceAdapter {
                                     }
                                     continue;
                                 },
+                                Err(e @ ValidateBookError::StaleUpdate { .. }) => {
+                                    warn!(
+                                        exchange = ?BinanceAdapter::exchange(),
+                                        component = ?BinanceAdapter::component(),
+                                        symbol = ?update.symbol,
+                                        error = ?e,
+                                        "stale update dropped"
+                                    );
+                                    continue;
+                                },
+                                Err(e @ ValidateBookError::UnknownType(_)) => {
+                                    warn!(
+                                        exchange = ?BinanceAdapter::exchange(),
+                                        component = ?BinanceAdapter::component(),
+                                        symbol = ?update.symbol,
+                                        error = ?e,
+                                        "unexpected update type dropped"
+                                    );
+                                    continue;
+                                },
                                 Err(e) => {
                                     error!(
                                         exchange = ?BinanceAdapter::exchange(),
                                         component = ?BinanceAdapter::component(),
                                         symbol = ?update.symbol,
                                         error = ?e,
-                                        "error while validating update"
+                                        "update validation failed"
                                     );
                                     continue;
                                 },

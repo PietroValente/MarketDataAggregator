@@ -53,7 +53,13 @@ impl OkxAdapter {
             let latency = now.saturating_sub(book_data.ts.parse::<u64>().unwrap_or(0));
 
             if latency > 1000 {
-                warn!(exchange = ?OkxAdapter::exchange(), component = ?OkxAdapter::component(), symbol = ?payload.arg.inst_id, "high latency for update: {} ms", latency);
+                warn!(
+                    exchange = ?OkxAdapter::exchange(),
+                    component = ?OkxAdapter::component(),
+                    symbol = ?payload.arg.inst_id,
+                    latency_ms = latency,
+                    "high latency for update"
+                );
             }
         }
 
@@ -130,12 +136,12 @@ impl OkxAdapter {
                                 DepthBookAction::Update => {
                                     match self.validate_update(&depth) {
                                         Err(e @ ValidateBookError::StaleUpdate { event_prev_seq_id: _, book_prev_seq_id: _ }) => {
-                                            error!(
+                                            warn!(
                                                 exchange = ?OkxAdapter::exchange(),
                                                 component = ?OkxAdapter::component(),
                                                 symbol = ?depth.arg.inst_id,
                                                 error = ?e,
-                                                "error while validating update"
+                                                "stale update dropped"
                                             );
                                             continue;
                                         },

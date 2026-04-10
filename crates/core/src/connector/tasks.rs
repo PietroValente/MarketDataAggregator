@@ -3,7 +3,7 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 use futures_util::{stream::{SplitSink, SplitStream}, SinkExt, StreamExt};
 use tokio::{net::TcpStream, sync::mpsc::{Receiver, Sender}};
 use tokio_tungstenite::{tungstenite::Message, MaybeTlsStream, WebSocketStream};
-use tracing::{error, info, warn};
+use tracing::{error, warn};
 use url::Url;
 
 use crate::{events::{ControlEvent, InboundEvent, PingMsg}, helpers::connector::{abort_all_connections, pong_ws, retry_with_backoff}, traits::connector::ExchangeConnector};
@@ -178,9 +178,10 @@ pub async fn connection_manager_task<T, S, Raw, Recreate, Fut>(
 
             ManagerCommand::RecreateWithSnapshots => {
                 if recreate_in_progress {
-                    info!(
+                    warn!(
                         exchange = ?T::exchange(),
                         component = ?T::component(),
+                        reason = "already_in_progress",
                         "recreate already in progress, skipping"
                     );
                     continue;
@@ -221,8 +222,8 @@ pub async fn connection_manager_task<T, S, Raw, Recreate, Fut>(
                                 exchange = ?T::exchange(),
                                 component = ?T::component(),
                                 error = ?e,
-                                attempt = attempt,
-                                delay = ?delay,
+                                attempt = attempt + 1,
+                                delay_ms = delay.as_millis() as u64,
                                 "error while recreating connections"
                             );
                         },

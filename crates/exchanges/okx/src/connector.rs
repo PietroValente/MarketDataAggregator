@@ -4,7 +4,7 @@ use md_core::{connector::{tasks::{connection_manager_task, control_manager_task}
 use reqwest::Client;
 use tokio::{sync::mpsc::{channel, Receiver, Sender}, time::Duration};
 use tokio_tungstenite::tungstenite::Message;
-use tracing::{error, info};
+use tracing::{error, warn};
 use url::Url;
 
 use crate::types::{ApiResponse, OkxMdMsg, OkxUrls, SubscriptionRequest, Subscriptions, SymbolParam};
@@ -76,7 +76,14 @@ impl OkxConnector {
             &BACKOFF_SECS,
             || OkxConnector::get_subscriptions_list(client.clone(), rest_url),
             |e, attempt: usize, delay: Duration| {
-                error!(exchange = ?OkxConnector::exchange(), component = ?OkxConnector::component(), error = ?e, attempt = ?attempt, delay = ?delay, "error while building subscriptions");
+                error!(
+                    exchange = ?OkxConnector::exchange(),
+                    component = ?OkxConnector::component(),
+                    error = ?e,
+                    attempt = attempt + 1,
+                    delay_ms = delay.as_millis() as u64,
+                    "error while building subscriptions"
+                );
             },
         ).await;
         
@@ -147,7 +154,12 @@ impl OkxConnector {
                     }
                 },
                 InboundEvent::ConnectionClosed => {
-                    info!(exchange = ?OkxConnector::exchange(), component = ?OkxConnector::component(), "connection close, reconnecting");
+                    warn!(
+                        exchange = ?OkxConnector::exchange(),
+                        component = ?OkxConnector::component(),
+                        reason = "connection_closed",
+                        "connection closed, scheduling reconnect"
+                    );
                     if let Err(e) = self.subscribe_streams().await {
                         error!(exchange = ?OkxConnector::exchange(), component = ?OkxConnector::component(), error = ?e, "error while subscribing to streams");
                         continue;

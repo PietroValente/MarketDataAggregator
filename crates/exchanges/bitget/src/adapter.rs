@@ -59,7 +59,13 @@ impl BitgetAdapter {
             let latency = now.saturating_sub(book_data.ts.parse::<u64>().unwrap_or(0));
 
             if latency > 1000 {
-                warn!(exchange = ?BitgetAdapter::exchange(), component = ?BitgetAdapter::component(), symbol = ?payload.arg.inst_id, "high latency for update: {} ms", latency);
+                warn!(
+                    exchange = ?BitgetAdapter::exchange(),
+                    component = ?BitgetAdapter::component(),
+                    symbol = ?payload.arg.inst_id,
+                    latency_ms = latency,
+                    "high latency for update"
+                );
             }
         }
 
@@ -131,12 +137,12 @@ impl BitgetAdapter {
                                 DepthBookAction::Update => {
                                     match self.validate_update(&depth) {
                                         Err(e @ ValidateBookError::StaleUpdate { new_seq: _, last_seq: _ }) => {
-                                            error!(
+                                            warn!(
                                                 exchange = ?BitgetAdapter::exchange(),
                                                 component = ?BitgetAdapter::component(),
                                                 symbol = ?depth.arg.inst_id,
                                                 error = ?e,
-                                                "error while validating update"
+                                                "stale update dropped"
                                             );
                                             continue;
                                         },

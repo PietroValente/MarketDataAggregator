@@ -4,7 +4,7 @@ use md_core::{connector::{tasks::{connection_manager_task, control_manager_task}
 use reqwest::Client;
 use tokio::{sync::mpsc::{channel, Receiver, Sender}, time::Duration};
 use tokio_tungstenite::tungstenite::Message;
-use tracing::{error, info};
+use tracing::{error, warn};
 use url::Url;
 
 use crate::types::{ApiResponse, BybitMdMsg, BybitUrls, SubscriptionRequest, Subscriptions};
@@ -76,7 +76,14 @@ impl BybitConnector {
             &BACKOFF_SECS,
             || BybitConnector::get_subscriptions_list(client.clone(), rest_url),
             |e, attempt: usize, delay: Duration| {
-                error!(exchange = ?BybitConnector::exchange(), component = ?BybitConnector::component(), error = ?e, attempt = ?attempt, delay = ?delay, "error while building subscriptions");
+                error!(
+                    exchange = ?BybitConnector::exchange(),
+                    component = ?BybitConnector::component(),
+                    error = ?e,
+                    attempt = attempt + 1,
+                    delay_ms = delay.as_millis() as u64,
+                    "error while building subscriptions"
+                );
             },
         ).await;
         
@@ -147,7 +154,12 @@ impl BybitConnector {
                     }
                 },
                 InboundEvent::ConnectionClosed => {
-                    info!(exchange = ?BybitConnector::exchange(), component = ?BybitConnector::component(), "connection close, reconnecting");
+                    warn!(
+                        exchange = ?BybitConnector::exchange(),
+                        component = ?BybitConnector::component(),
+                        reason = "connection_closed",
+                        "connection closed, scheduling reconnect"
+                    );
                     if let Err(e) = self.subscribe_streams().await {
                         error!(exchange = ?BybitConnector::exchange(), component = ?BybitConnector::component(), error = ?e, "error while subscribing to streams");
                         continue;

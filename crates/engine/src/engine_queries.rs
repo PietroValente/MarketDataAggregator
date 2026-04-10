@@ -10,7 +10,7 @@ use md_core::{
 };
 use rust_decimal::prelude::ToPrimitive;
 use rust_decimal_macros::dec;
-use tracing::error;
+use tracing::warn;
 
 use crate::engine::Engine;
 
@@ -23,10 +23,11 @@ impl Engine {
                 let result = self.query_exchange_status(exchange);
 
                 if reply_to.send(result).is_err() {
-                    error!(
+                    warn!(
                         exchange = ?exchange,
                         component = ?Component::Engine,
-                        "error sending ExchangeStatus response"
+                        query_type = "exchange_status",
+                        "query requester dropped before response send"
                     );
                 }
             }
@@ -35,10 +36,11 @@ impl Engine {
                 let result = self.query_book(exchange, instrument, depth);
 
                 if reply_to.send(result).is_err() {
-                    error!(
+                    warn!(
                         exchange = ?exchange,
                         component = ?Component::Engine,
-                        "error sending Book response"
+                        query_type = "book",
+                        "query requester dropped before response send"
                     );
                 }
             }
@@ -47,7 +49,7 @@ impl Engine {
                 let result = self.query_best(&instrument);
 
                 if reply_to.send(result).is_err() {
-                    error!(component = ?Component::Engine, "error sending Best response");
+                    warn!(component = ?Component::Engine, query_type = "best", "query requester dropped before response send");
                 }
             }
 
@@ -55,7 +57,7 @@ impl Engine {
                 let result = self.query_spread(&instrument);
 
                 if reply_to.send(result).is_err() {
-                    error!(component = ?Component::Engine, "error sending Spread response");
+                    warn!(component = ?Component::Engine, query_type = "spread", "query requester dropped before response send");
                 }
             }
 
@@ -63,7 +65,7 @@ impl Engine {
                 let result = self.query_depth(&instrument, depth);
 
                 if reply_to.send(result).is_err() {
-                    error!(component = ?Component::Engine, "error sending Depth response");
+                    warn!(component = ?Component::Engine, query_type = "depth", "query requester dropped before response send");
                 }
             }
 
@@ -71,10 +73,11 @@ impl Engine {
                 let result = self.query_list(exchange);
 
                 if reply_to.send(result).is_err() {
-                    error!(
+                    warn!(
                         exchange = ?exchange,
                         component = ?Component::Engine,
-                        "error sending List response"
+                        query_type = "list",
+                        "query requester dropped before response send"
                     );
                 }
             }
@@ -83,9 +86,10 @@ impl Engine {
                 let result = self.query_search(&query);
 
                 if reply_to.send(result).is_err() {
-                    error!(
+                    warn!(
                         component = ?Component::Engine,
-                        "error sending Search response"
+                        query_type = "search",
+                        "query requester dropped before response send"
                     );
                 }
             }
@@ -93,9 +97,10 @@ impl Engine {
                 let result = self.query_search_contains(&query, limit);
 
                 if reply_to.send(result).is_err() {
-                    error!(
+                    warn!(
                         component = ?Component::Engine,
-                        "error sending SearchContains response"
+                        query_type = "search_contains",
+                        "query requester dropped before response send"
                     );
                 }
             }
@@ -103,9 +108,10 @@ impl Engine {
                 let result = self.query_search_suffix(&query, limit);
 
                 if reply_to.send(result).is_err() {
-                    error!(
+                    warn!(
                         component = ?Component::Engine,
-                        "error sending SearchSuffix response"
+                        query_type = "search_suffix",
+                        "query requester dropped before response send"
                     );
                 }
             }
@@ -113,9 +119,10 @@ impl Engine {
                 let result = self.query_search_glob(&query, limit);
 
                 if reply_to.send(result).is_err() {
-                    error!(
+                    warn!(
                         component = ?Component::Engine,
-                        "error sending SearchGlob response"
+                        query_type = "search_glob",
+                        "query requester dropped before response send"
                     );
                 }
             }
@@ -124,9 +131,10 @@ impl Engine {
                 let result = self.query_all_statuses();
 
                 if reply_to.send(result).is_err() {
-                    error!(
+                    warn!(
                         component = ?Component::Engine,
-                        "error sending AllStatuses response"
+                        query_type = "all_statuses",
+                        "query requester dropped before response send"
                     );
                 }
             }

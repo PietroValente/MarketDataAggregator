@@ -50,7 +50,13 @@ impl CoinbaseAdapter {
             let latency = now.saturating_sub(payload_ms);
 
             if latency > 1000 {
-                warn!(exchange = ?CoinbaseAdapter::exchange(), component = ?CoinbaseAdapter::component(), symbol = ?payload.product_id, "high latency for update: {} ms", latency);
+                warn!(
+                    exchange = ?CoinbaseAdapter::exchange(),
+                    component = ?CoinbaseAdapter::component(),
+                    symbol = ?payload.product_id,
+                    latency_ms = latency,
+                    "high latency for update"
+                );
             }
         }
 

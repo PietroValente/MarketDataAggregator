@@ -53,7 +53,13 @@ impl BybitAdapter {
             let latency = now.saturating_sub(payload.cts);
 
             if latency > 1000 {
-                warn!(exchange = ?BybitAdapter::exchange(), component = ?BybitAdapter::component(), symbol = ?payload.data.symbol, "high latency for update: {} ms", latency);
+                warn!(
+                    exchange = ?BybitAdapter::exchange(),
+                    component = ?BybitAdapter::component(),
+                    symbol = ?payload.data.symbol,
+                    latency_ms = latency,
+                    "high latency for update"
+                );
             }
         }
 
@@ -119,12 +125,12 @@ impl BybitAdapter {
                                 DepthBookAction::Delta => {
                                     match self.validate_update(&depth) {
                                         Err(e @ ValidateBookError::StaleUpdate { new_update_id: _, last_update_id: _ }) => {
-                                            error!(
+                                            warn!(
                                                 exchange = ?BybitAdapter::exchange(),
                                                 component = ?BybitAdapter::component(),
                                                 symbol = ?depth.data.symbol,
                                                 error = ?e,
-                                                "error while validating update"
+                                                "stale update dropped"
                                             );
                                             continue;
                                         },

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use md_core::{events::{BookEventType, ControlEvent, EngineMessage, EventEnvelope, NormalizedEvent}, logging::types::Component, types::Exchange};
 use tokio::sync::mpsc::{Receiver, Sender};
-use tracing::error;
+use tracing::{error, warn};
 
 use crate::exchange_state::{ExchangeState, ExchangeStateError};
 
@@ -39,12 +39,18 @@ impl Engine {
                             match event_type {
                                 BookEventType::Snapshot => {
                                     if let Err(e) = exchange_state.apply_snapshot(book_data) {
-                                        error!(exchange = ?exchange, component = ?Component::Engine, error = ?e, "apply_snapshot error");
                                         match e {
-                                            ExchangeStateError::InstrumentNotFound(_) => {
+                                            ExchangeStateError::InstrumentNotFound(instrument) => {
+                                                warn!(
+                                                    exchange = ?exchange,
+                                                    component = ?Component::Engine,
+                                                    instrument = ?instrument,
+                                                    "snapshot ignored: instrument not tracked yet"
+                                                );
                                                 continue;
                                             },
                                             ExchangeStateError::ChecksumError { instrument: _, source: _ } => {
+                                                error!(exchange = ?exchange, component = ?Component::Engine, error = ?e, "apply_snapshot checksum error, resync requested");
                                                 exchange_state.resync();
                                             }
                                         }
@@ -52,12 +58,18 @@ impl Engine {
                                 },
                                 BookEventType::Update => {
                                     if let Err(e) = exchange_state.apply_update(book_data) {
-                                        error!(exchange = ?exchange, component = ?Component::Engine, error = ?e, "apply_update error");
                                         match e {
-                                            ExchangeStateError::InstrumentNotFound(_) => {
+                                            ExchangeStateError::InstrumentNotFound(instrument) => {
+                                                warn!(
+                                                    exchange = ?exchange,
+                                                    component = ?Component::Engine,
+                                                    instrument = ?instrument,
+                                                    "update ignored: instrument not tracked yet"
+                                                );
                                                 continue;
                                             },
                                             ExchangeStateError::ChecksumError { instrument: _, source: _ } => {
+                                                error!(exchange = ?exchange, component = ?Component::Engine, error = ?e, "apply_update checksum error, resync requested");
                                                 exchange_state.resync();
                                             }
                                         }
