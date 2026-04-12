@@ -186,6 +186,10 @@ pub async fn connection_manager_task<T, S, Raw, Recreate, Fut>(
 
     while let Some(cmd) = cmd_rx.recv().await {
         match cmd {
+            ManagerCommand::AbortAllConnections => {
+                abort_all_connections(&mut connections);
+            }
+
             ManagerCommand::RecreateFinished => {
                 recreate_in_progress = false;
             }
@@ -210,7 +214,6 @@ pub async fn connection_manager_task<T, S, Raw, Recreate, Fut>(
                 }
 
                 recreate_in_progress = true;
-                abort_all_connections(&mut connections);
 
                 let recreate_fn = recreate.clone();
                 let cmd_tx_done = cmd_tx.clone();

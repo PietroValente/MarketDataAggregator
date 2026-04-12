@@ -1,17 +1,19 @@
 use std::{
     collections::HashMap,
     error::Error,
-    time::{SystemTime, UNIX_EPOCH},
+    thread,
+    time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
 use md_core::{
     book::BookLevels,
+    connector::types::{INACTIVITY_TIMEOUT_SECS, POLL_INTERVAL_SECS},
     events::{BookEventType, ControlEvent, EngineMessage, NormalizedBookData, NormalizedEvent},
     helpers::adapter::{clear_book_state, compute_status, send_normalized_event, send_status},
     traits::adapter::ExchangeAdapter,
     types::{Exchange, Instrument},
 };
-use tokio::sync::mpsc::{Receiver, Sender};
+use tokio::sync::mpsc::{Receiver, Sender, error::TryRecvError};
 use tracing::{error, warn};
 
 use crate::types::{
@@ -24,6 +26,7 @@ pub struct BitgetAdapter {
     control_tx: Sender<ControlEvent>,
     book_states: HashMap<Instrument, BookState>,
     live_books: usize,
+    resync_in_progress: bool,
 }
 
 impl BitgetAdapter {
@@ -38,6 +41,7 @@ impl BitgetAdapter {
             control_tx,
             book_states: HashMap::new(),
             live_books: 0,
+            resync_in_progress: false,
         }
     }
 
@@ -105,125 +109,170 @@ impl BitgetAdapter {
     }
 
     pub fn run(&mut self) {
-        while let Some(msg) = self.raw_rx.blocking_recv() {
-            match msg {
-                BitgetMdMsg::ResetBookState => {
-                    self.live_books = 0;
-                    clear_book_state(&mut self.book_states);
-                    send_status::<BitgetAdapter>(
-                        &self.normalized_tx,
-                        compute_status(self.live_books, self.book_states.len()),
-                    );
-                }
-                BitgetMdMsg::Instruments(symbols) => {
-                    for i in symbols.iter() {
-                        self.book_states.insert(i.clone(), BookState::new());
-                    }
-                    send_status::<BitgetAdapter>(
-                        &self.normalized_tx,
-                        compute_status(self.live_books, self.book_states.len()),
-                    );
-                }
-                BitgetMdMsg::Raw(msg) => match serde_json::from_slice::<WsMessage>(&msg) {
-                    Ok(WsMessage::Confirmation(_)) => {
-                        continue;
-                    }
-                    Err(_) => {
-                        let text = String::from_utf8_lossy(&msg);
-                        error!(exchange = ?BitgetAdapter::exchange(), component = ?BitgetAdapter::component(), text = ?text, "error while parsing update");
-                    }
-                    Ok(WsMessage::Depth(depth)) => {
-                        let inst_id = depth.arg.inst_id.clone();
-                        let action = depth.action.clone();
+        let mut last_msg_at = Instant::now();
 
-                        match action {
-                            DepthBookAction::Snapshot => {
-                                if let Err(e) = self.validate_snapshot(&depth) {
-                                    error!(exchange = ?BitgetAdapter::exchange(), component = ?BitgetAdapter::component(), symbol = ?inst_id, error = ?e, "error while validating snapshot");
-                                    if let Err(e) =
-                                        self.control_tx.blocking_send(ControlEvent::Resync)
-                                    {
-                                        error!(exchange = ?BitgetAdapter::exchange(), component = ?BitgetAdapter::component(), error = ?e, "error while sending resync");
-                                    }
-                                }
-                                for data in depth.data {
-                                    let mut checksum = None;
-                                    if data.checksum != 0 {
-                                        checksum = Some(data.checksum);
-                                    }
-                                    let snapshot_event = NormalizedEvent::Book(
-                                        BookEventType::Snapshot,
-                                        NormalizedBookData {
-                                            instrument: inst_id.clone(),
-                                            levels: BookLevels {
-                                                asks: data.asks,
-                                                bids: data.bids,
-                                            },
-                                            checksum,
-                                        },
-                                    );
-                                    send_normalized_event::<BitgetAdapter>(
-                                        &self.normalized_tx,
-                                        snapshot_event,
-                                    );
-                                }
-                                send_status::<BitgetAdapter>(
-                                    &self.normalized_tx,
-                                    compute_status(self.live_books, self.book_states.len()),
-                                );
+        loop {
+            match self.raw_rx.try_recv() {
+                Ok(msg) => {
+                    last_msg_at = Instant::now();
+                    match msg {
+                        BitgetMdMsg::ResetBookState => {
+                            self.resync_in_progress = false;
+                            self.live_books = 0;
+                            clear_book_state(&mut self.book_states);
+                            send_status::<BitgetAdapter>(
+                                &self.normalized_tx,
+                                compute_status(self.live_books, self.book_states.len()),
+                            );
+                        }
+                        BitgetMdMsg::Instruments(symbols) => {
+                            for i in symbols.iter() {
+                                self.book_states.insert(i.clone(), BookState::new());
                             }
-                            DepthBookAction::Update => {
-                                match self.validate_update(&depth) {
-                                    Err(
-                                        e @ ValidateBookError::StaleUpdate {
-                                            new_seq: _,
-                                            last_seq: _,
-                                        },
-                                    ) => {
-                                        warn!(
-                                            exchange = ?BitgetAdapter::exchange(),
-                                            component = ?BitgetAdapter::component(),
-                                            symbol = ?depth.arg.inst_id,
-                                            error = ?e,
-                                            "stale update dropped"
+                            send_status::<BitgetAdapter>(
+                                &self.normalized_tx,
+                                compute_status(self.live_books, self.book_states.len()),
+                            );
+                        }
+                        BitgetMdMsg::Raw(msg) => match serde_json::from_slice::<WsMessage>(&msg) {
+                            Ok(WsMessage::Confirmation(_)) => {
+                                continue;
+                            }
+                            Err(_) => {
+                                let text = String::from_utf8_lossy(&msg);
+                                error!(exchange = ?BitgetAdapter::exchange(), component = ?BitgetAdapter::component(), text = ?text, "error while parsing update");
+                            }
+                            Ok(WsMessage::Depth(depth)) => {
+                                let inst_id = depth.arg.inst_id.clone();
+                                let action = depth.action.clone();
+
+                                match action {
+                                    DepthBookAction::Snapshot => {
+                                        if let Err(e) = self.validate_snapshot(&depth) {
+                                            error!(exchange = ?BitgetAdapter::exchange(), component = ?BitgetAdapter::component(), symbol = ?inst_id, error = ?e, "error while validating snapshot");
+                                            if !self.resync_in_progress
+                                                && let Err(e) = self
+                                                    .control_tx
+                                                    .blocking_send(ControlEvent::Resync)
+                                            {
+                                                error!(exchange = ?BitgetAdapter::exchange(), component = ?BitgetAdapter::component(), error = ?e, "error while sending resync");
+                                            } else {
+                                                self.resync_in_progress = true;
+                                            }
+                                            continue;
+                                        }
+                                        for data in depth.data {
+                                            let mut checksum = None;
+                                            if data.checksum != 0 {
+                                                checksum = Some(data.checksum);
+                                            }
+                                            let snapshot_event = NormalizedEvent::Book(
+                                                BookEventType::Snapshot,
+                                                NormalizedBookData {
+                                                    instrument: inst_id.clone(),
+                                                    levels: BookLevels {
+                                                        asks: data.asks,
+                                                        bids: data.bids,
+                                                    },
+                                                    checksum,
+                                                },
+                                            );
+                                            send_normalized_event::<BitgetAdapter>(
+                                                &self.normalized_tx,
+                                                snapshot_event,
+                                            );
+                                        }
+                                        send_status::<BitgetAdapter>(
+                                            &self.normalized_tx,
+                                            compute_status(self.live_books, self.book_states.len()),
                                         );
-                                        continue;
                                     }
-                                    Err(e) => {
-                                        error!(exchange = ?BitgetAdapter::exchange(), component = ?BitgetAdapter::component(), symbol = ?inst_id, error = ?e, "error while validating update");
-                                        if let Err(e) =
-                                            self.control_tx.blocking_send(ControlEvent::Resync)
-                                        {
-                                            error!(exchange = ?BitgetAdapter::exchange(), component = ?BitgetAdapter::component(), error = ?e, "error while sending resync");
+                                    DepthBookAction::Update => {
+                                        match self.validate_update(&depth) {
+                                            Err(
+                                                e @ ValidateBookError::StaleUpdate {
+                                                    new_seq: _,
+                                                    last_seq: _,
+                                                },
+                                            ) => {
+                                                warn!(
+                                                    exchange = ?BitgetAdapter::exchange(),
+                                                    component = ?BitgetAdapter::component(),
+                                                    symbol = ?depth.arg.inst_id,
+                                                    error = ?e,
+                                                    "stale update dropped"
+                                                );
+                                                continue;
+                                            }
+                                            Err(e @ ValidateBookError::MissingSnapshot) => {
+                                                warn!(exchange = ?BitgetAdapter::exchange(), component = ?BitgetAdapter::component(), symbol = ?depth.arg.inst_id, error = ?e, "missing snapshot, skipping update");
+                                                continue;
+                                            }
+                                            Err(e) => {
+                                                error!(exchange = ?BitgetAdapter::exchange(), component = ?BitgetAdapter::component(), symbol = ?inst_id, error = ?e, "error while validating update");
+                                                if !self.resync_in_progress
+                                                    && let Err(e) = self
+                                                        .control_tx
+                                                        .blocking_send(ControlEvent::Resync)
+                                                {
+                                                    error!(exchange = ?BitgetAdapter::exchange(), component = ?BitgetAdapter::component(), error = ?e, "error while sending resync");
+                                                } else {
+                                                    self.resync_in_progress = true;
+                                                }
+                                                continue;
+                                            }
+                                            Ok(()) => {}
+                                        }
+                                        for data in depth.data {
+                                            let mut checksum = None;
+                                            if data.checksum != 0 {
+                                                checksum = Some(data.checksum);
+                                            }
+                                            let update_event = NormalizedEvent::Book(
+                                                BookEventType::Update,
+                                                NormalizedBookData {
+                                                    instrument: inst_id.clone(),
+                                                    levels: BookLevels {
+                                                        asks: data.asks,
+                                                        bids: data.bids,
+                                                    },
+                                                    checksum,
+                                                },
+                                            );
+                                            send_normalized_event::<BitgetAdapter>(
+                                                &self.normalized_tx,
+                                                update_event,
+                                            );
                                         }
                                     }
-                                    Ok(()) => {}
-                                }
-                                for data in depth.data {
-                                    let mut checksum = None;
-                                    if data.checksum != 0 {
-                                        checksum = Some(data.checksum);
-                                    }
-                                    let update_event = NormalizedEvent::Book(
-                                        BookEventType::Update,
-                                        NormalizedBookData {
-                                            instrument: inst_id.clone(),
-                                            levels: BookLevels {
-                                                asks: data.asks,
-                                                bids: data.bids,
-                                            },
-                                            checksum,
-                                        },
-                                    );
-                                    send_normalized_event::<BitgetAdapter>(
-                                        &self.normalized_tx,
-                                        update_event,
-                                    );
                                 }
                             }
-                        }
+                        },
                     }
-                },
+                }
+                Err(TryRecvError::Empty) => {
+                    if last_msg_at.elapsed() >= INACTIVITY_TIMEOUT_SECS {
+                        warn!(
+                            exchange = ?BitgetAdapter::exchange(),
+                            component = ?BitgetAdapter::component(),
+                            timeout_secs = ?INACTIVITY_TIMEOUT_SECS.as_secs(),
+                            "no messages received for too long, triggering resync"
+                        );
+
+                        if !self.resync_in_progress
+                            && let Err(e) = self.control_tx.blocking_send(ControlEvent::Resync)
+                        {
+                            error!(exchange = ?BitgetAdapter::exchange(), component = ?BitgetAdapter::component(), error = ?e, "error while sending resync after inactivity timeout");
+                        } else {
+                            self.resync_in_progress = true;
+                        }
+
+                        last_msg_at = Instant::now();
+                    }
+
+                    thread::sleep(POLL_INTERVAL_SECS);
+                }
+                Err(TryRecvError::Disconnected) => break,
             }
         }
     }

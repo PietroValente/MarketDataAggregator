@@ -1,18 +1,19 @@
 use std::{
     collections::HashMap,
     error::Error,
-    mem,
-    time::{SystemTime, UNIX_EPOCH},
+    mem, thread,
+    time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
 use md_core::{
     book::BookLevels,
+    connector::types::{INACTIVITY_TIMEOUT_SECS, POLL_INTERVAL_SECS},
     events::{BookEventType, ControlEvent, EngineMessage, NormalizedBookData, NormalizedEvent},
     helpers::adapter::{clear_book_state, compute_status, send_normalized_event, send_status},
     traits::adapter::ExchangeAdapter,
     types::{Exchange, Instrument},
 };
-use tokio::sync::mpsc::{Receiver, Sender};
+use tokio::sync::mpsc::{Receiver, Sender, error::TryRecvError};
 use tracing::{error, warn};
 
 use crate::types::{
@@ -26,6 +27,7 @@ pub struct BinanceAdapter {
     control_tx: Sender<ControlEvent>,
     book_states: HashMap<Instrument, BookState>,
     live_books: usize,
+    resync_in_progress: bool,
 }
 
 impl BinanceAdapter {
@@ -42,6 +44,7 @@ impl BinanceAdapter {
             control_tx,
             book_states: HashMap::new(),
             live_books: 0,
+            resync_in_progress: false,
         }
     }
 
@@ -125,166 +128,242 @@ impl BinanceAdapter {
     }
 
     pub fn run(&mut self) {
-        while let Some(msg) = self.raw_rx.blocking_recv() {
-            match msg {
-                BinanceMdMsg::ResetBookState => {
-                    self.live_books = 0;
-                    clear_book_state(&mut self.book_states);
-                    send_status::<BinanceAdapter>(
-                        &self.normalized_tx,
-                        compute_status(self.live_books, self.book_states.len()),
-                    );
-                }
-                BinanceMdMsg::Instruments(list) => {
-                    for i in list.iter() {
-                        self.book_states.insert(i.clone(), BookState::new());
-                    }
-                    send_status::<BinanceAdapter>(
-                        &self.normalized_tx,
-                        compute_status(self.live_books, self.book_states.len()),
-                    );
-                }
-                BinanceMdMsg::Snapshot(payload) => {
-                    let Ok(parsed_snapshot) =
-                        serde_json::from_slice::<ParsedBookSnapshot>(&payload.payload)
-                    else {
-                        let text = String::from_utf8_lossy(&payload.payload);
-                        error!(exchange = ?BinanceAdapter::exchange(), component = ?BinanceAdapter::component(), symbol = ?payload.symbol, text = ?text, "error while parsing snapshot");
-                        continue;
-                    };
-                    if let Err(e) = self.validate_snapshot(&ValidateSnapshot {
-                        symbol: payload.symbol.clone(),
-                        last_update_id: parsed_snapshot.last_update_id,
-                    }) {
-                        error!(exchange = ?BinanceAdapter::exchange(), component = ?BinanceAdapter::component(), symbol = ?payload.symbol, error = ?e, "error while validating snapshot");
-                        if let Err(e) = self.control_tx.blocking_send(ControlEvent::Resync) {
-                            error!(exchange = ?BinanceAdapter::exchange(), component = ?BinanceAdapter::component(), error = ?e, "error while sending resync");
+        let mut last_msg_at = Instant::now();
+
+        loop {
+            match self.raw_rx.try_recv() {
+                Ok(msg) => {
+                    last_msg_at = Instant::now();
+
+                    match msg {
+                        BinanceMdMsg::ResetBookState => {
+                            self.resync_in_progress = false;
+                            self.live_books = 0;
+                            clear_book_state(&mut self.book_states);
+                            send_status::<BinanceAdapter>(
+                                &self.normalized_tx,
+                                compute_status(self.live_books, self.book_states.len()),
+                            );
                         }
-                    }
-                    let book_snapshot = BookLevels {
-                        asks: parsed_snapshot.asks,
-                        bids: parsed_snapshot.bids,
-                    };
-                    let snapshot_event = NormalizedEvent::Book(
-                        BookEventType::Snapshot,
-                        NormalizedBookData {
-                            instrument: payload.symbol.clone(),
-                            levels: book_snapshot,
-                            checksum: None,
-                        },
-                    );
-                    send_normalized_event::<BinanceAdapter>(&self.normalized_tx, snapshot_event);
-                    self.drain_buffered_updates(payload.symbol);
-                    send_status::<BinanceAdapter>(
-                        &self.normalized_tx,
-                        compute_status(self.live_books, self.book_states.len()),
-                    );
-                }
-                BinanceMdMsg::WsMessage(payload) => {
-                    match serde_json::from_slice::<WsMessage>(&payload) {
-                        Ok(WsMessage::Confirmation(confirmation)) => {
-                            if let Some(result) = confirmation.result {
-                                error!(exchange = ?BinanceAdapter::exchange(), component = ?BinanceAdapter::component(), result = ?result,"subscription result different from null");
+                        BinanceMdMsg::Instruments(list) => {
+                            for i in list.iter() {
+                                self.book_states.insert(i.clone(), BookState::new());
                             }
+                            send_status::<BinanceAdapter>(
+                                &self.normalized_tx,
+                                compute_status(self.live_books, self.book_states.len()),
+                            );
                         }
-                        Err(_) => {
-                            let text = String::from_utf8_lossy(&payload);
-                            error!(exchange = ?BinanceAdapter::exchange(), component = ?BinanceAdapter::component(), text = ?text, "error while parsing update");
-                        }
-                        Ok(WsMessage::Update(update)) => {
-                            let Some(book) = self.book_states.get_mut(&update.symbol) else {
-                                error!(exchange = ?BinanceAdapter::exchange(), component = ?BinanceAdapter::component(), symbol = ?update.symbol, "symbol not found");
+                        BinanceMdMsg::Snapshot(payload) => {
+                            let Ok(parsed_snapshot) =
+                                serde_json::from_slice::<ParsedBookSnapshot>(&payload.payload)
+                            else {
+                                let text = String::from_utf8_lossy(&payload.payload);
+                                error!(
+                                    exchange = ?BinanceAdapter::exchange(),
+                                    component = ?BinanceAdapter::component(),
+                                    symbol = ?payload.symbol,
+                                    text = ?text,
+                                    "error while parsing snapshot"
+                                );
                                 continue;
                             };
-                            match book.status {
-                                BookSyncStatus::Live => {}
-                                BookSyncStatus::WaitingSnapshot => {
-                                    book.symbols_pending_snapshot.push(payload);
-                                    continue;
-                                }
-                            };
 
-                            //process the update
-                            match self.validate_update(&update) {
-                                Err(
-                                    e @ ValidateBookError::UpdateGap {
-                                        event_first_update_id,
-                                        expected_next_update_id,
-                                    },
-                                ) => {
-                                    error!(
-                                        exchange = ?BinanceAdapter::exchange(),
-                                        component = ?BinanceAdapter::component(),
-                                        symbol = ?update.symbol,
-                                        error = ?e,
-                                        event_first_update_id = event_first_update_id,
-                                        expected_next_update_id = expected_next_update_id,
-                                        "error while validating update"
-                                    );
-                                    if let Err(e) =
+                            if let Err(e) = self.validate_snapshot(&ValidateSnapshot {
+                                symbol: payload.symbol.clone(),
+                                last_update_id: parsed_snapshot.last_update_id,
+                            }) {
+                                error!(exchange = ?BinanceAdapter::exchange(), component = ?BinanceAdapter::component(), symbol = ?payload.symbol, error = ?e, "error while validating snapshot");
+                                if !self.resync_in_progress
+                                    && let Err(e) =
                                         self.control_tx.blocking_send(ControlEvent::Resync)
-                                    {
-                                        error!(
-                                            exchange = ?BinanceAdapter::exchange(),
-                                            component = ?BinanceAdapter::component(),
-                                            error = ?e,
-                                            "error while sending resync"
-                                        );
-                                    }
-                                    continue;
+                                {
+                                    error!(exchange = ?BinanceAdapter::exchange(), component = ?BinanceAdapter::component(), error = ?e, "error while sending resync");
+                                } else {
+                                    self.resync_in_progress = true;
                                 }
-                                Err(e @ ValidateBookError::StaleUpdate { .. }) => {
-                                    warn!(
-                                        exchange = ?BinanceAdapter::exchange(),
-                                        component = ?BinanceAdapter::component(),
-                                        symbol = ?update.symbol,
-                                        error = ?e,
-                                        "stale update dropped"
-                                    );
-                                    continue;
-                                }
-                                Err(e @ ValidateBookError::UnknownType(_)) => {
-                                    warn!(
-                                        exchange = ?BinanceAdapter::exchange(),
-                                        component = ?BinanceAdapter::component(),
-                                        symbol = ?update.symbol,
-                                        error = ?e,
-                                        "unexpected update type dropped"
-                                    );
-                                    continue;
-                                }
-                                Err(e) => {
-                                    error!(
-                                        exchange = ?BinanceAdapter::exchange(),
-                                        component = ?BinanceAdapter::component(),
-                                        symbol = ?update.symbol,
-                                        error = ?e,
-                                        "update validation failed"
-                                    );
-                                    continue;
-                                }
-                                Ok(()) => {}
+                                continue;
                             }
 
-                            let book_update = BookLevels {
-                                bids: update.bids,
-                                asks: update.asks,
+                            let book_snapshot = BookLevels {
+                                asks: parsed_snapshot.asks,
+                                bids: parsed_snapshot.bids,
                             };
 
-                            let update_event = NormalizedEvent::Book(
-                                BookEventType::Update,
+                            let snapshot_event = NormalizedEvent::Book(
+                                BookEventType::Snapshot,
                                 NormalizedBookData {
-                                    instrument: update.symbol.clone(),
-                                    levels: book_update,
+                                    instrument: payload.symbol.clone(),
+                                    levels: book_snapshot,
                                     checksum: None,
                                 },
                             );
+
                             send_normalized_event::<BinanceAdapter>(
                                 &self.normalized_tx,
-                                update_event,
+                                snapshot_event,
+                            );
+                            self.drain_buffered_updates(payload.symbol);
+
+                            send_status::<BinanceAdapter>(
+                                &self.normalized_tx,
+                                compute_status(self.live_books, self.book_states.len()),
                             );
                         }
+                        BinanceMdMsg::WsMessage(payload) => {
+                            match serde_json::from_slice::<WsMessage>(&payload) {
+                                Ok(WsMessage::Confirmation(confirmation)) => {
+                                    if let Some(result) = confirmation.result {
+                                        error!(
+                                            exchange = ?BinanceAdapter::exchange(),
+                                            component = ?BinanceAdapter::component(),
+                                            result = ?result,
+                                            "subscription result different from null"
+                                        );
+                                    }
+                                }
+                                Err(_) => {
+                                    let text = String::from_utf8_lossy(&payload);
+                                    error!(
+                                        exchange = ?BinanceAdapter::exchange(),
+                                        component = ?BinanceAdapter::component(),
+                                        text = ?text,
+                                        "error while parsing update"
+                                    );
+                                }
+                                Ok(WsMessage::Update(update)) => {
+                                    let Some(book) = self.book_states.get_mut(&update.symbol)
+                                    else {
+                                        error!(
+                                            exchange = ?BinanceAdapter::exchange(),
+                                            component = ?BinanceAdapter::component(),
+                                            symbol = ?update.symbol,
+                                            "symbol not found"
+                                        );
+                                        continue;
+                                    };
+
+                                    match book.status {
+                                        BookSyncStatus::Live => {}
+                                        BookSyncStatus::WaitingSnapshot => {
+                                            book.symbols_pending_snapshot.push(payload);
+                                            continue;
+                                        }
+                                    };
+
+                                    match self.validate_update(&update) {
+                                        Err(
+                                            e @ ValidateBookError::UpdateGap {
+                                                event_first_update_id,
+                                                expected_next_update_id,
+                                            },
+                                        ) => {
+                                            error!(
+                                                exchange = ?BinanceAdapter::exchange(),
+                                                component = ?BinanceAdapter::component(),
+                                                symbol = ?update.symbol,
+                                                error = ?e,
+                                                event_first_update_id = event_first_update_id,
+                                                expected_next_update_id = expected_next_update_id,
+                                                "error while validating update"
+                                            );
+                                            if !self.resync_in_progress
+                                                && let Err(e) = self
+                                                    .control_tx
+                                                    .blocking_send(ControlEvent::Resync)
+                                            {
+                                                error!(exchange = ?BinanceAdapter::exchange(), component = ?BinanceAdapter::component(), error = ?e, "error while sending resync");
+                                            } else {
+                                                self.resync_in_progress = true;
+                                            }
+                                            continue;
+                                        }
+                                        Err(e @ ValidateBookError::StaleUpdate { .. }) => {
+                                            warn!(
+                                                exchange = ?BinanceAdapter::exchange(),
+                                                component = ?BinanceAdapter::component(),
+                                                symbol = ?update.symbol,
+                                                error = ?e,
+                                                "stale update dropped"
+                                            );
+                                            continue;
+                                        }
+                                        Err(e @ ValidateBookError::UnknownType(_)) => {
+                                            warn!(
+                                                exchange = ?BinanceAdapter::exchange(),
+                                                component = ?BinanceAdapter::component(),
+                                                symbol = ?update.symbol,
+                                                error = ?e,
+                                                "unexpected update type dropped"
+                                            );
+                                            continue;
+                                        }
+                                        Err(e @ ValidateBookError::MissingSnapshot) => {
+                                            warn!(exchange = ?BinanceAdapter::exchange(), component = ?BinanceAdapter::component(), symbol = ?update.symbol, error = ?e, "missing snapshot, skipping update");
+                                            continue;
+                                        }
+                                        Err(e) => {
+                                            error!(
+                                                exchange = ?BinanceAdapter::exchange(),
+                                                component = ?BinanceAdapter::component(),
+                                                symbol = ?update.symbol,
+                                                error = ?e,
+                                                "update validation failed"
+                                            );
+                                            continue;
+                                        }
+                                        Ok(()) => {}
+                                    }
+
+                                    let book_update = BookLevels {
+                                        bids: update.bids,
+                                        asks: update.asks,
+                                    };
+
+                                    let update_event = NormalizedEvent::Book(
+                                        BookEventType::Update,
+                                        NormalizedBookData {
+                                            instrument: update.symbol.clone(),
+                                            levels: book_update,
+                                            checksum: None,
+                                        },
+                                    );
+
+                                    send_normalized_event::<BinanceAdapter>(
+                                        &self.normalized_tx,
+                                        update_event,
+                                    );
+                                }
+                            }
+                        }
                     }
+                }
+
+                Err(TryRecvError::Empty) => {
+                    if last_msg_at.elapsed() >= INACTIVITY_TIMEOUT_SECS {
+                        warn!(
+                            exchange = ?BinanceAdapter::exchange(),
+                            component = ?BinanceAdapter::component(),
+                            timeout_secs = ?INACTIVITY_TIMEOUT_SECS.as_secs(),
+                            "no messages received for too long, triggering resync"
+                        );
+
+                        if !self.resync_in_progress
+                            && let Err(e) = self.control_tx.blocking_send(ControlEvent::Resync)
+                        {
+                            error!(exchange = ?BinanceAdapter::exchange(), component = ?BinanceAdapter::component(), error = ?e, "error while sending resync after inactivity timeout");
+                        } else {
+                            self.resync_in_progress = true;
+                        }
+
+                        last_msg_at = Instant::now();
+                    }
+
+                    thread::sleep(POLL_INTERVAL_SECS);
+                }
+
+                Err(TryRecvError::Disconnected) => {
+                    break;
                 }
             }
         }

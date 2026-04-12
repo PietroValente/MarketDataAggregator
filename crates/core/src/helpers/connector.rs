@@ -15,7 +15,9 @@ use url::Url;
 use crate::{
     connector::{
         tasks::{reader_task, writer_task},
-        types::{ConnectionTasks, ConnectorError, ManagerCommand, WriteCommand},
+        types::{
+            ConnectionTasks, ConnectorError, ManagerCommand, WS_CONNECT_TIMEOUT_SECS, WriteCommand,
+        },
     },
     events::{InboundEvent, PingMsg},
     traits::connector::ExchangeConnector,
@@ -129,9 +131,15 @@ where
         .into());
     }
 
+    cmd_tx.send(ManagerCommand::AbortAllConnections).await?;
+
     for (i, message) in subscriptions_payloads.iter().enumerate() {
         let (writer_tx, writer_rx) = channel::<WriteCommand>(64);
-        let (ws_stream, _) = connect_async(ws_url.as_str()).await?;
+        let (ws_stream, _) =
+            tokio::time::timeout(WS_CONNECT_TIMEOUT_SECS, connect_async(ws_url.as_str()))
+                .await
+                .map_err(|_| ConnectorError::WebSocketConnectTimeout)??;
+
         let (write, read) = ws_stream.split();
 
         let reader_url = ws_url.clone();

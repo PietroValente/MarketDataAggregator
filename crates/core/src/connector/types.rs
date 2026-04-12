@@ -10,11 +10,15 @@ use crate::events::PingMsg;
 
 pub const BACKOFF_SECS: [Duration; 5] = [
     Duration::from_secs(1),
-    Duration::from_secs(5),
-    Duration::from_secs(15),
-    Duration::from_secs(30),
-    Duration::from_secs(60),
+    Duration::from_secs(2),
+    Duration::from_secs(4),
+    Duration::from_secs(8),
+    Duration::from_secs(16),
 ];
+
+pub const WS_CONNECT_TIMEOUT_SECS: Duration = Duration::from_secs(10);
+pub const INACTIVITY_TIMEOUT_SECS: Duration = Duration::from_secs(4);
+pub const POLL_INTERVAL_SECS: Duration = Duration::from_millis(50);
 
 pub enum WriteCommand {
     Raw(Message),
@@ -28,6 +32,7 @@ pub struct ConnectionTasks {
 }
 
 pub enum ManagerCommand {
+    AbortAllConnections,
     InsertSubscription(u8, ConnectionTasks),
     RecreateWithSnapshots,
     RecreateFinished,
@@ -44,4 +49,6 @@ pub enum ConnectorError {
         batches: usize,
         max_supported: usize,
     },
+    #[error("websocket connect timeout")]
+    WebSocketConnectTimeout,
 }

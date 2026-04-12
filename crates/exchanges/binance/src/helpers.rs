@@ -4,7 +4,9 @@ use futures_util::{StreamExt, TryStreamExt, stream};
 use md_core::{
     connector::{
         tasks::{reader_task, writer_task},
-        types::{ConnectionTasks, ConnectorError, ManagerCommand, WriteCommand},
+        types::{
+            ConnectionTasks, ConnectorError, ManagerCommand, WS_CONNECT_TIMEOUT_SECS, WriteCommand,
+        },
     },
     events::InboundEvent,
     helpers::connector::{ws_id_capacity, ws_id_from_index},
@@ -37,9 +39,15 @@ pub async fn recreate_with_snapshots(
         .into());
     }
 
+    cmd_tx.send(ManagerCommand::AbortAllConnections).await?;
+
     for (i, batch) in batches_payloads.iter().enumerate() {
         let (writer_tx, writer_rx) = channel::<WriteCommand>(64);
-        let (ws_stream, _) = connect_async(ws_url.as_str()).await?;
+        let (ws_stream, _) =
+            tokio::time::timeout(WS_CONNECT_TIMEOUT_SECS, connect_async(ws_url.as_str()))
+                .await
+                .map_err(|_| ConnectorError::WebSocketConnectTimeout)??;
+
         let (write, read) = ws_stream.split();
 
         let reader_url = ws_url.clone();
