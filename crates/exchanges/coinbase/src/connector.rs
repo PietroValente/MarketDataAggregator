@@ -78,7 +78,6 @@ impl CoinbaseConnector {
         tokio::spawn(control_manager_task::<CoinbaseConnector>(
             control_rx,
             manager_tx.clone(),
-            inbound_tx,
         ));
 
         Ok(Self {

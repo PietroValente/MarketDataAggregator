@@ -2,6 +2,8 @@
 
 **A production-style, multi-exchange market data engine in Rust:** live order books from several cryptocurrency venues, normalized into one domain model, queryable from a terminal CLI, with structured tracing persisted to ScyllaDB.
 
+🎥 **Demo:** https://www.youtube.com/watch?v=WJHcxRxGulQ
+
 ## Project overview
 
 **What it is.** A workspace of crates that connects to public WebSocket and REST market-data APIs, keeps in-memory L2 books per exchange and instrument, and exposes cross-venue views (best bid/ask, spreads, aggregated depth) through an interactive CLI.

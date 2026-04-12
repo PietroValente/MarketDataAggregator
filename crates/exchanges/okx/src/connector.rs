@@ -75,7 +75,6 @@ impl OkxConnector {
         tokio::spawn(control_manager_task::<OkxConnector>(
             control_rx,
             manager_tx.clone(),
-            inbound_tx,
         ));
 
         Ok(Self {
