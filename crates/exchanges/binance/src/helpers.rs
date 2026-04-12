@@ -40,6 +40,7 @@ pub async fn recreate_with_snapshots(
     }
 
     cmd_tx.send(ManagerCommand::AbortAllConnections).await?;
+    inbound_tx.send(InboundEvent::ClearBookState).await?;
 
     for (i, batch) in batches_payloads.iter().enumerate() {
         let (writer_tx, writer_rx) = channel::<WriteCommand>(64);

@@ -1,15 +1,16 @@
 use std::{
     collections::HashMap,
     error::Error,
-    thread,
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
 use md_core::{
     book::BookLevels,
-    connector::types::{INACTIVITY_TIMEOUT_SECS, POLL_INTERVAL_SECS},
     events::{BookEventType, ControlEvent, EngineMessage, NormalizedBookData, NormalizedEvent},
-    helpers::adapter::{clear_book_state, compute_status, send_normalized_event, send_status},
+    helpers::adapter::{
+        clear_book_state, compute_status, handle_inactivity_timeout, send_normalized_event,
+        send_status,
+    },
     traits::adapter::ExchangeAdapter,
     types::{Exchange, Instrument},
 };
@@ -114,43 +115,101 @@ impl OkxAdapter {
 
         loop {
             match self.raw_rx.try_recv() {
-                Ok(msg) => {
-                    last_msg_at = Instant::now();
-                    match msg {
-                        OkxMdMsg::ResetBookState => {
-                            self.resync_in_progress = false;
-                            self.live_books = 0;
-                            clear_book_state(&mut self.book_states);
-                            send_status::<OkxAdapter>(
-                                &self.normalized_tx,
-                                compute_status(self.live_books, self.book_states.len()),
-                            );
+                Ok(msg) => match msg {
+                    OkxMdMsg::ResetBookState => {
+                        self.resync_in_progress = false;
+                        self.live_books = 0;
+                        clear_book_state(&mut self.book_states);
+                        send_status::<OkxAdapter>(
+                            &self.normalized_tx,
+                            compute_status(self.live_books, self.book_states.len()),
+                        );
+                    }
+                    OkxMdMsg::Instruments(symbols) => {
+                        for i in symbols.iter() {
+                            self.book_states.insert(i.clone(), BookState::new());
                         }
-                        OkxMdMsg::Instruments(symbols) => {
-                            for i in symbols.iter() {
-                                self.book_states.insert(i.clone(), BookState::new());
-                            }
-                            send_status::<OkxAdapter>(
-                                &self.normalized_tx,
-                                compute_status(self.live_books, self.book_states.len()),
-                            );
+                        send_status::<OkxAdapter>(
+                            &self.normalized_tx,
+                            compute_status(self.live_books, self.book_states.len()),
+                        );
+                    }
+                    OkxMdMsg::Raw(msg) => match serde_json::from_slice::<WsMessage>(&msg) {
+                        Ok(WsMessage::Confirmation(_)) => {
+                            continue;
                         }
-                        OkxMdMsg::Raw(msg) => match serde_json::from_slice::<WsMessage>(&msg) {
-                            Ok(WsMessage::Confirmation(_)) => {
-                                continue;
-                            }
-                            Err(_) => {
-                                let text = String::from_utf8_lossy(&msg);
-                                error!(exchange = ?OkxAdapter::exchange(), component = ?OkxAdapter::component(), text = ?text, "error while parsing update");
-                            }
-                            Ok(WsMessage::Depth(depth)) => {
-                                let inst_id = depth.arg.inst_id.replace("-", "");
-                                let action = depth.action.clone();
+                        Err(_) => {
+                            let text = String::from_utf8_lossy(&msg);
+                            error!(exchange = ?OkxAdapter::exchange(), component = ?OkxAdapter::component(), text = ?text, "error while parsing update");
+                        }
+                        Ok(WsMessage::Depth(depth)) => {
+                            last_msg_at = Instant::now();
+                            let inst_id = depth.arg.inst_id.replace("-", "");
+                            let action = depth.action.clone();
 
-                                match action {
-                                    DepthBookAction::Snapshot => {
-                                        if let Err(e) = self.validate_snapshot(&depth) {
-                                            error!(exchange = ?OkxAdapter::exchange(), component = ?OkxAdapter::component(), error = ?e, "error while validating snapshot");
+                            match action {
+                                DepthBookAction::Snapshot => {
+                                    if let Err(e) = self.validate_snapshot(&depth) {
+                                        error!(exchange = ?OkxAdapter::exchange(), component = ?OkxAdapter::component(), error = ?e, "error while validating snapshot");
+                                        if !self.resync_in_progress
+                                            && let Err(e) =
+                                                self.control_tx.blocking_send(ControlEvent::Resync)
+                                        {
+                                            error!(exchange = ?OkxAdapter::exchange(), component = ?OkxAdapter::component(), error = ?e, "error while sending resync");
+                                        } else {
+                                            self.resync_in_progress = true;
+                                        }
+                                        continue;
+                                    }
+                                    for data in depth.data {
+                                        let mut checksum = None;
+                                        if data.checksum != 0 {
+                                            checksum = Some(data.checksum);
+                                        }
+                                        let snapshot_event = NormalizedEvent::Book(
+                                            BookEventType::Snapshot,
+                                            NormalizedBookData {
+                                                instrument: Instrument::from(inst_id.clone()),
+                                                levels: BookLevels {
+                                                    asks: data.asks,
+                                                    bids: data.bids,
+                                                },
+                                                checksum,
+                                            },
+                                        );
+                                        send_normalized_event::<OkxAdapter>(
+                                            &self.normalized_tx,
+                                            snapshot_event,
+                                        );
+                                    }
+                                    send_status::<OkxAdapter>(
+                                        &self.normalized_tx,
+                                        compute_status(self.live_books, self.book_states.len()),
+                                    );
+                                }
+                                DepthBookAction::Update => {
+                                    match self.validate_update(&depth) {
+                                        Err(
+                                            e @ ValidateBookError::StaleUpdate {
+                                                event_prev_seq_id: _,
+                                                book_prev_seq_id: _,
+                                            },
+                                        ) => {
+                                            warn!(
+                                                exchange = ?OkxAdapter::exchange(),
+                                                component = ?OkxAdapter::component(),
+                                                symbol = ?depth.arg.inst_id,
+                                                error = ?e,
+                                                "stale update dropped"
+                                            );
+                                            continue;
+                                        }
+                                        Err(e @ ValidateBookError::MissingSnapshot) => {
+                                            warn!(exchange = ?OkxAdapter::exchange(), component = ?OkxAdapter::component(), symbol = ?depth.arg.inst_id, error = ?e, "missing snapshot, skipping update");
+                                            continue;
+                                        }
+                                        Err(e) => {
+                                            error!(exchange = ?OkxAdapter::exchange(), component = ?OkxAdapter::component(), symbol = ?inst_id, error = ?e, "error while validating update");
                                             if !self.resync_in_progress
                                                 && let Err(e) = self
                                                     .control_tx
@@ -162,116 +221,40 @@ impl OkxAdapter {
                                             }
                                             continue;
                                         }
-                                        for data in depth.data {
-                                            let mut checksum = None;
-                                            if data.checksum != 0 {
-                                                checksum = Some(data.checksum);
-                                            }
-                                            let snapshot_event = NormalizedEvent::Book(
-                                                BookEventType::Snapshot,
-                                                NormalizedBookData {
-                                                    instrument: Instrument::from(inst_id.clone()),
-                                                    levels: BookLevels {
-                                                        asks: data.asks,
-                                                        bids: data.bids,
-                                                    },
-                                                    checksum,
-                                                },
-                                            );
-                                            send_normalized_event::<OkxAdapter>(
-                                                &self.normalized_tx,
-                                                snapshot_event,
-                                            );
-                                        }
-                                        send_status::<OkxAdapter>(
-                                            &self.normalized_tx,
-                                            compute_status(self.live_books, self.book_states.len()),
-                                        );
+                                        Ok(()) => {}
                                     }
-                                    DepthBookAction::Update => {
-                                        match self.validate_update(&depth) {
-                                            Err(
-                                                e @ ValidateBookError::StaleUpdate {
-                                                    event_prev_seq_id: _,
-                                                    book_prev_seq_id: _,
-                                                },
-                                            ) => {
-                                                warn!(
-                                                    exchange = ?OkxAdapter::exchange(),
-                                                    component = ?OkxAdapter::component(),
-                                                    symbol = ?depth.arg.inst_id,
-                                                    error = ?e,
-                                                    "stale update dropped"
-                                                );
-                                                continue;
-                                            }
-                                            Err(e @ ValidateBookError::MissingSnapshot) => {
-                                                warn!(exchange = ?OkxAdapter::exchange(), component = ?OkxAdapter::component(), symbol = ?depth.arg.inst_id, error = ?e, "missing snapshot, skipping update");
-                                                continue;
-                                            }
-                                            Err(e) => {
-                                                error!(exchange = ?OkxAdapter::exchange(), component = ?OkxAdapter::component(), symbol = ?inst_id, error = ?e, "error while validating update");
-                                                if !self.resync_in_progress
-                                                    && let Err(e) = self
-                                                        .control_tx
-                                                        .blocking_send(ControlEvent::Resync)
-                                                {
-                                                    error!(exchange = ?OkxAdapter::exchange(), component = ?OkxAdapter::component(), error = ?e, "error while sending resync");
-                                                } else {
-                                                    self.resync_in_progress = true;
-                                                }
-                                                continue;
-                                            }
-                                            Ok(()) => {}
+                                    for data in depth.data {
+                                        let mut checksum = None;
+                                        if data.checksum != 0 {
+                                            checksum = Some(data.checksum);
                                         }
-                                        for data in depth.data {
-                                            let mut checksum = None;
-                                            if data.checksum != 0 {
-                                                checksum = Some(data.checksum);
-                                            }
-                                            let update_event = NormalizedEvent::Book(
-                                                BookEventType::Update,
-                                                NormalizedBookData {
-                                                    instrument: Instrument::from(inst_id.clone()),
-                                                    levels: BookLevels {
-                                                        asks: data.asks,
-                                                        bids: data.bids,
-                                                    },
-                                                    checksum,
+                                        let update_event = NormalizedEvent::Book(
+                                            BookEventType::Update,
+                                            NormalizedBookData {
+                                                instrument: Instrument::from(inst_id.clone()),
+                                                levels: BookLevels {
+                                                    asks: data.asks,
+                                                    bids: data.bids,
                                                 },
-                                            );
-                                            send_normalized_event::<OkxAdapter>(
-                                                &self.normalized_tx,
-                                                update_event,
-                                            );
-                                        }
+                                                checksum,
+                                            },
+                                        );
+                                        send_normalized_event::<OkxAdapter>(
+                                            &self.normalized_tx,
+                                            update_event,
+                                        );
                                     }
                                 }
                             }
-                        },
-                    }
-                }
-                Err(TryRecvError::Empty) => {
-                    if last_msg_at.elapsed() >= INACTIVITY_TIMEOUT_SECS {
-                        warn!(
-                            exchange = ?OkxAdapter::exchange(),
-                            component = ?OkxAdapter::component(),
-                            timeout_secs = ?INACTIVITY_TIMEOUT_SECS.as_secs(),
-                            "no messages received for too long, triggering resync"
-                        );
-
-                        if !self.resync_in_progress
-                            && let Err(e) = self.control_tx.blocking_send(ControlEvent::Resync)
-                        {
-                            error!(exchange = ?OkxAdapter::exchange(), component = ?OkxAdapter::component(), error = ?e, "error while sending resync after inactivity timeout");
-                        } else {
-                            self.resync_in_progress = true;
                         }
-
-                        last_msg_at = Instant::now();
-                    }
-
-                    thread::sleep(POLL_INTERVAL_SECS);
+                    },
+                },
+                Err(TryRecvError::Empty) => {
+                    handle_inactivity_timeout::<OkxAdapter>(
+                        &mut last_msg_at,
+                        &mut self.resync_in_progress,
+                        &self.control_tx,
+                    );
                 }
                 Err(TryRecvError::Disconnected) => break,
             }

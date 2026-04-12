@@ -132,6 +132,7 @@ where
     }
 
     cmd_tx.send(ManagerCommand::AbortAllConnections).await?;
+    inbound_tx.send(InboundEvent::ClearBookState).await?;
 
     for (i, message) in subscriptions_payloads.iter().enumerate() {
         let (writer_tx, writer_rx) = channel::<WriteCommand>(64);

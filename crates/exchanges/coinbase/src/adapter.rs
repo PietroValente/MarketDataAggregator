@@ -1,16 +1,17 @@
 use std::{
     collections::HashMap,
     error::Error,
-    thread,
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
 use chrono::DateTime;
 use md_core::{
     book::BookLevels,
-    connector::types::{INACTIVITY_TIMEOUT_SECS, POLL_INTERVAL_SECS},
     events::{BookEventType, ControlEvent, EngineMessage, NormalizedBookData, NormalizedEvent},
-    helpers::adapter::{clear_book_state, compute_status, send_normalized_event, send_status},
+    helpers::adapter::{
+        clear_book_state, compute_status, handle_inactivity_timeout, send_normalized_event,
+        send_status,
+    },
     traits::adapter::ExchangeAdapter,
     types::{Exchange, Instrument},
 };
@@ -96,140 +97,121 @@ impl CoinbaseAdapter {
 
         loop {
             match self.raw_rx.try_recv() {
-                Ok(msg) => {
-                    last_msg_at = Instant::now();
-                    match msg {
-                        CoinbaseMdMsg::ResetBookState => {
-                            self.resync_in_progress = false;
-                            self.live_books = 0;
-                            clear_book_state(&mut self.book_states);
-                            send_status::<CoinbaseAdapter>(
-                                &self.normalized_tx,
-                                compute_status(self.live_books, self.book_states.len()),
-                            );
+                Ok(msg) => match msg {
+                    CoinbaseMdMsg::ResetBookState => {
+                        self.resync_in_progress = false;
+                        self.live_books = 0;
+                        clear_book_state(&mut self.book_states);
+                        send_status::<CoinbaseAdapter>(
+                            &self.normalized_tx,
+                            compute_status(self.live_books, self.book_states.len()),
+                        );
+                    }
+                    CoinbaseMdMsg::Instruments(symbols) => {
+                        for i in symbols.iter() {
+                            self.book_states.insert(i.clone(), BookState::new());
                         }
-                        CoinbaseMdMsg::Instruments(symbols) => {
-                            for i in symbols.iter() {
-                                self.book_states.insert(i.clone(), BookState::new());
+                        send_status::<CoinbaseAdapter>(
+                            &self.normalized_tx,
+                            compute_status(self.live_books, self.book_states.len()),
+                        );
+                    }
+                    CoinbaseMdMsg::Raw(msg) => match serde_json::from_slice::<WsMessage>(&msg) {
+                        Ok(WsMessage::Confirmation(_)) => {
+                            continue;
+                        }
+                        Err(_) => {
+                            let text = String::from_utf8_lossy(&msg);
+                            error!(exchange = ?CoinbaseAdapter::exchange(), component = ?CoinbaseAdapter::component(), text = ?text, "error while parsing update");
+                        }
+                        Ok(WsMessage::Snapshot(depth)) => {
+                            last_msg_at = Instant::now();
+                            let inst_id = depth.product_id.replace("-", "");
+                            if let Err(e) = self.validate_snapshot(&depth) {
+                                error!(exchange = ?CoinbaseAdapter::exchange(), component = ?CoinbaseAdapter::component(), symbol = ?inst_id, error = ?e, "error while validating snapshot");
+                                if !self.resync_in_progress
+                                    && let Err(e) =
+                                        self.control_tx.blocking_send(ControlEvent::Resync)
+                                {
+                                    error!(exchange = ?CoinbaseAdapter::exchange(), component = ?CoinbaseAdapter::component(), error = ?e, "error while sending resync");
+                                } else {
+                                    self.resync_in_progress = true;
+                                }
+                                continue;
                             }
+                            let snapshot_event = NormalizedEvent::Book(
+                                BookEventType::Snapshot,
+                                NormalizedBookData {
+                                    instrument: Instrument::from(inst_id),
+                                    levels: BookLevels {
+                                        asks: depth.asks,
+                                        bids: depth.bids,
+                                    },
+                                    checksum: None,
+                                },
+                            );
+                            send_normalized_event::<CoinbaseAdapter>(
+                                &self.normalized_tx,
+                                snapshot_event,
+                            );
                             send_status::<CoinbaseAdapter>(
                                 &self.normalized_tx,
                                 compute_status(self.live_books, self.book_states.len()),
                             );
                         }
-                        CoinbaseMdMsg::Raw(msg) => {
-                            match serde_json::from_slice::<WsMessage>(&msg) {
-                                Ok(WsMessage::Confirmation(_)) => {
+                        Ok(WsMessage::Update(depth)) => {
+                            last_msg_at = Instant::now();
+                            let inst_id = depth.product_id.replace("-", "");
+                            match self.validate_update(&depth) {
+                                Err(e @ ValidateBookError::MissingSnapshot) => {
+                                    warn!(exchange = ?CoinbaseAdapter::exchange(), component = ?CoinbaseAdapter::component(), symbol = ?inst_id, error = ?e, "missing snapshot, skipping update");
                                     continue;
                                 }
-                                Err(_) => {
-                                    let text = String::from_utf8_lossy(&msg);
-                                    error!(exchange = ?CoinbaseAdapter::exchange(), component = ?CoinbaseAdapter::component(), text = ?text, "error while parsing update");
+                                Err(e) => {
+                                    error!(exchange = ?CoinbaseAdapter::exchange(), component = ?CoinbaseAdapter::component(), symbol = ?inst_id, error = ?e, "error while validating update");
+                                    if !self.resync_in_progress
+                                        && let Err(e) =
+                                            self.control_tx.blocking_send(ControlEvent::Resync)
+                                    {
+                                        error!(exchange = ?CoinbaseAdapter::exchange(), component = ?CoinbaseAdapter::component(), error = ?e, "error while sending resync");
+                                    } else {
+                                        self.resync_in_progress = true;
+                                    }
+                                    continue;
                                 }
-                                Ok(WsMessage::Snapshot(depth)) => {
-                                    let inst_id = depth.product_id.replace("-", "");
-                                    if let Err(e) = self.validate_snapshot(&depth) {
-                                        error!(exchange = ?CoinbaseAdapter::exchange(), component = ?CoinbaseAdapter::component(), symbol = ?inst_id, error = ?e, "error while validating snapshot");
-                                        if !self.resync_in_progress
-                                            && let Err(e) =
-                                                self.control_tx.blocking_send(ControlEvent::Resync)
-                                        {
-                                            error!(exchange = ?CoinbaseAdapter::exchange(), component = ?CoinbaseAdapter::component(), error = ?e, "error while sending resync");
-                                        } else {
-                                            self.resync_in_progress = true;
-                                        }
-                                        continue;
-                                    }
-                                    let snapshot_event = NormalizedEvent::Book(
-                                        BookEventType::Snapshot,
-                                        NormalizedBookData {
-                                            instrument: Instrument::from(inst_id),
-                                            levels: BookLevels {
-                                                asks: depth.asks,
-                                                bids: depth.bids,
-                                            },
-                                            checksum: None,
-                                        },
-                                    );
-                                    send_normalized_event::<CoinbaseAdapter>(
-                                        &self.normalized_tx,
-                                        snapshot_event,
-                                    );
-                                    send_status::<CoinbaseAdapter>(
-                                        &self.normalized_tx,
-                                        compute_status(self.live_books, self.book_states.len()),
-                                    );
-                                }
-                                Ok(WsMessage::Update(depth)) => {
-                                    let inst_id = depth.product_id.replace("-", "");
-                                    match self.validate_update(&depth) {
-                                        Err(e @ ValidateBookError::MissingSnapshot) => {
-                                            warn!(exchange = ?CoinbaseAdapter::exchange(), component = ?CoinbaseAdapter::component(), symbol = ?inst_id, error = ?e, "missing snapshot, skipping update");
-                                            continue;
-                                        }
-                                        Err(e) => {
-                                            error!(exchange = ?CoinbaseAdapter::exchange(), component = ?CoinbaseAdapter::component(), symbol = ?inst_id, error = ?e, "error while validating update");
-                                            if !self.resync_in_progress
-                                                && let Err(e) = self
-                                                    .control_tx
-                                                    .blocking_send(ControlEvent::Resync)
-                                            {
-                                                error!(exchange = ?CoinbaseAdapter::exchange(), component = ?CoinbaseAdapter::component(), error = ?e, "error while sending resync");
-                                            } else {
-                                                self.resync_in_progress = true;
-                                            }
-                                            continue;
-                                        }
-                                        Ok(()) => {}
-                                    }
-                                    let mut bids = Vec::new();
-                                    let mut asks = Vec::new();
+                                Ok(()) => {}
+                            }
+                            let mut bids = Vec::new();
+                            let mut asks = Vec::new();
 
-                                    for (side, price, qty) in depth.changes {
-                                        match side {
-                                            Side::Bid => bids.push((price, qty)),
-                                            Side::Ask => asks.push((price, qty)),
-                                        }
-                                    }
-
-                                    let update_event = NormalizedEvent::Book(
-                                        BookEventType::Update,
-                                        NormalizedBookData {
-                                            instrument: Instrument::from(inst_id),
-                                            levels: BookLevels { asks, bids },
-                                            checksum: None,
-                                        },
-                                    );
-                                    send_normalized_event::<CoinbaseAdapter>(
-                                        &self.normalized_tx,
-                                        update_event,
-                                    );
+                            for (side, price, qty) in depth.changes {
+                                match side {
+                                    Side::Bid => bids.push((price, qty)),
+                                    Side::Ask => asks.push((price, qty)),
                                 }
                             }
+
+                            let update_event = NormalizedEvent::Book(
+                                BookEventType::Update,
+                                NormalizedBookData {
+                                    instrument: Instrument::from(inst_id),
+                                    levels: BookLevels { asks, bids },
+                                    checksum: None,
+                                },
+                            );
+                            send_normalized_event::<CoinbaseAdapter>(
+                                &self.normalized_tx,
+                                update_event,
+                            );
                         }
-                    }
-                }
+                    },
+                },
                 Err(TryRecvError::Empty) => {
-                    if last_msg_at.elapsed() >= INACTIVITY_TIMEOUT_SECS {
-                        warn!(
-                            exchange = ?CoinbaseAdapter::exchange(),
-                            component = ?CoinbaseAdapter::component(),
-                            timeout_secs = ?INACTIVITY_TIMEOUT_SECS.as_secs(),
-                            "no messages received for too long, triggering resync"
-                        );
-
-                        if !self.resync_in_progress
-                            && let Err(e) = self.control_tx.blocking_send(ControlEvent::Resync)
-                        {
-                            error!(exchange = ?CoinbaseAdapter::exchange(), component = ?CoinbaseAdapter::component(), error = ?e, "error while sending resync after inactivity timeout");
-                        } else {
-                            self.resync_in_progress = true;
-                        }
-
-                        last_msg_at = Instant::now();
-                    }
-
-                    thread::sleep(POLL_INTERVAL_SECS);
+                    handle_inactivity_timeout::<CoinbaseAdapter>(
+                        &mut last_msg_at,
+                        &mut self.resync_in_progress,
+                        &self.control_tx,
+                    );
                 }
                 Err(TryRecvError::Disconnected) => break,
             }

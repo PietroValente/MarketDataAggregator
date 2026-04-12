@@ -1,10 +1,11 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, time::Instant};
 
 use tokio::sync::mpsc::Sender;
-use tracing::error;
+use tracing::{error, warn};
 
 use crate::{
-    events::{EngineMessage, EventEnvelope, NormalizedEvent},
+    connector::types::{INACTIVITY_TIMEOUT_SECS, POLL_INTERVAL_SECS},
+    events::{ControlEvent, EngineMessage, EventEnvelope, NormalizedEvent},
     traits::adapter::ExchangeAdapter,
     types::{ExchangeStatus, Instrument},
 };
@@ -52,4 +53,38 @@ pub fn compute_status(live_books: usize, total_books: usize) -> ExchangeStatus {
     } else {
         ExchangeStatus::Initializing(live_books as f32 / total_books as f32)
     }
+}
+
+pub fn handle_inactivity_timeout<T>(
+    last_msg_at: &mut Instant,
+    resync_in_progress: &mut bool,
+    control_tx: &Sender<ControlEvent>,
+) where
+    T: ExchangeAdapter,
+{
+    if last_msg_at.elapsed() >= INACTIVITY_TIMEOUT_SECS {
+        warn!(
+            exchange = ?T::exchange(),
+            component = ?T::component(),
+            timeout_secs = ?INACTIVITY_TIMEOUT_SECS.as_secs(),
+            "no messages received for too long, triggering resync"
+        );
+
+        if !*resync_in_progress {
+            if let Err(e) = control_tx.blocking_send(ControlEvent::Resync) {
+                error!(
+                    exchange = ?T::exchange(),
+                    component = ?T::component(),
+                    error = ?e,
+                    "error while sending resync after inactivity timeout"
+                );
+            } else {
+                *resync_in_progress = true;
+            }
+        }
+
+        *last_msg_at = Instant::now();
+    }
+
+    std::thread::sleep(POLL_INTERVAL_SECS);
 }
