@@ -115,16 +115,12 @@ pub async fn writer_task(
 pub async fn control_manager_task<T>(
     mut control_rx: Receiver<ControlEvent>,
     manager_tx: Sender<ManagerCommand>,
-    inbound_tx: Sender<InboundEvent>,
 ) where
     T: ExchangeConnector,
 {
     while let Some(event) = control_rx.recv().await {
         match event {
             ControlEvent::Resync => {
-                if let Err(e) = inbound_tx.send(InboundEvent::ClearBookState).await {
-                    error!(exchange = ?T::exchange(), component = ?T::component(), error = ?e, "failed to send ClearBookState");
-                }
                 if let Err(e) = manager_tx.send(ManagerCommand::RecreateWithSnapshots).await {
                     error!(exchange = ?T::exchange(), component = ?T::component(), error = ?e, "failed to send RecreateWithSnapshots command to manager");
                 }

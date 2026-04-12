@@ -78,7 +78,6 @@ impl BitgetConnector {
         tokio::spawn(control_manager_task::<BitgetConnector>(
             control_rx,
             manager_tx.clone(),
-            inbound_tx,
         ));
 
         Ok(Self {
